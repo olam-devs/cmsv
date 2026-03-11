@@ -251,7 +251,7 @@ let scheduleTimer = null;
 function scheduleNext() {
   const delay = msUntilNextPhase();
   const mins  = Math.round(delay / 60000);
-  logger.info(`[Report] Next phase report in ${mins}m (${getPhaseName()})`);
+  logger.info(`[Report] Next phase report in ${mins}m (${getPhaseInfo().name})`);
   scheduleTimer = setTimeout(() => {
     sendReport();
     scheduleNext();
