@@ -1220,7 +1220,7 @@ function ChatView() {
 
 // ── Vehicle Modal ─────────────────────────────────────────────────────────────
 
-function VehicleModal({ vehicle, onClose }) {
+function VehicleModal({ vehicle, onClose, onViewVideo }) {
   const { t } = useTheme();
   if (!vehicle) return null;
   const statusColor = vehicle.online === 1 ? t.green : vehicle.online === 2 ? t.red : t.muted;
@@ -1252,8 +1252,67 @@ function VehicleModal({ vehicle, onClose }) {
           ))}
         </div>
         <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
-          <Btn color={t.blue} outline style={{ flex: 1 }}>📹 Live Camera</Btn>
+          <Btn color={t.blue} outline style={{ flex: 1 }} onClick={onViewVideo}>📹 Live Camera</Btn>
           <Btn color={t.accent} outline style={{ flex: 1 }}>📍 Track History</Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function VideoModal({ vehicle, onClose }) {
+  const { t } = useTheme();
+  const [streamData, setStreamData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    if (!vehicle) return;
+    setLoading(true); setError(null);
+    apiFetch(`/cameras/${encodeURIComponent(vehicle.devIdno)}/stream`)
+      .then(setStreamData)
+      .catch(e => setError(e.message))
+      .finally(() => setLoading(false));
+  }, [vehicle]);
+
+  if (!vehicle) return null;
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "#000000ee", zIndex: 2000, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }} onClick={onClose}>
+      <div style={{ width: "95vw", maxWidth: 900, background: t.panel, borderRadius: 16, overflow: "hidden", boxShadow: "0 20px 60px rgba(0,0,0,0.8)" }} onClick={e => e.stopPropagation()}>
+        <div style={{ padding: "16px 20px", display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: `1px solid ${t.border}` }}>
+          <div>
+            <div style={{ color: t.text, fontWeight: 800, fontSize: 16 }}>📹 LIVE CAMERA — {vehicle.plate || vehicle.nm}</div>
+            <div style={{ color: t.textSoft, fontSize: 11 }}>Channel 1 (Primary Feed) · {vehicle.devIdno}</div>
+          </div>
+          <button onClick={onClose} style={{ background: t.bgAlt, border: "none", color: t.text, width: 32, height: 32, borderRadius: "50%", cursor: "pointer", fontSize: 20 }}>×</button>
+        </div>
+        
+        <div style={{ position: "relative", minHeight: 500, background: "#000", display: "flex", alignItems: "center", justifyContent: "center" }}>
+          {loading && <Spinner label="Initializing secure connection..." />}
+          {error && <div style={{ padding: 40 }}><ErrorBanner message={error} /></div>}
+          
+          {!loading && !error && streamData?.playerUrl && (
+            <iframe 
+              src={streamData.playerUrl}
+              style={{ width: "100%", height: "70vh", border: "none" }}
+              allow="autoplay; fullscreen"
+            />
+          )}
+          
+          {!loading && !error && !streamData?.playerUrl && (
+            <div style={{ color: "#fff", padding: 40, textAlign: "center" }}>
+              <div style={{ fontSize: 40, marginBottom: 16 }}>⚠️</div>
+              <div>Camera feed unavailable. Verify vehicle is online and device supports video.</div>
+            </div>
+          )}
+        </div>
+        
+        <div style={{ padding: "14px 20px", background: t.bgAlt, display: "flex", gap: 12, justifyContent: "center" }}>
+          {streamData?.hlsPageUrl && (
+             <Btn color={t.blue} outline onClick={() => window.open(streamData.hlsPageUrl, "_blank")} style={{ fontSize: 11 }}>📱 Open Mobile Stream</Btn>
+          )}
+          <Btn onClick={onClose} style={{ fontSize: 11 }}>Close Player</Btn>
         </div>
       </div>
     </div>
@@ -1803,6 +1862,7 @@ function FleetDashboardContent() {
   const { t, theme, toggleTheme } = useTheme();
   const [view, setView] = useState("dashboard");
   const [selectedVehicle, setSelectedVehicle] = useState(null);
+  const [videoVehicle,    setVideoVehicle]    = useState(null);
 
   const [snapshot,     setSnapshot]     = useState(null);
   const [snapLoading,  setSnapLoading]  = useState(true);
@@ -1829,7 +1889,7 @@ function FleetDashboardContent() {
   const dismissToast = useCallback((id) => setToasts(p => p.filter(tk => tk.id !== id)), []);
 
   useEffect(() => {
-    const es = new EventSource(`http://localhost:3000/api/events?api_key=${API_KEY}`);
+    const es = new EventSource(`${API_BASE}/events?api_key=${API_KEY}`);
     es.addEventListener("history", e => {
       try { const h = JSON.parse(e.data); if (Array.isArray(h)) setAccEvents(h); } catch (_) {}
     });
@@ -2092,7 +2152,22 @@ function FleetDashboardContent() {
         </div>
       </div>
 
-      {selectedVehicle && <VehicleModal vehicle={selectedVehicle} onClose={() => setSelectedVehicle(null)} />}
+      {selectedVehicle && (
+        <VehicleModal 
+          vehicle={selectedVehicle} 
+          onClose={() => setSelectedVehicle(null)} 
+          onViewVideo={() => {
+            setVideoVehicle(selectedVehicle);
+            setSelectedVehicle(null);
+          }}
+        />
+      )}
+      {videoVehicle && (
+        <VideoModal 
+          vehicle={videoVehicle} 
+          onClose={() => setVideoVehicle(null)} 
+        />
+      )}
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
 
       <style>{`
