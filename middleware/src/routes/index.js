@@ -180,14 +180,22 @@ router.get('/fuel/:id/live', async (req, res) => {
 });
 
 /**
- * GET /api/fuel/:id/report?begintime=...&endtime=...&type=summary|dynamic|abnormal
- * Fuel report (consumption, refills, anomalies/theft detection)
+ * GET /api/fuel/:id/report?begintime=...&endtime=...
+ * Fuel consumption chart data — GPS track points with yl (fuel) field.
+ * id may be a plate number or devIdno; we resolve devIdno automatically.
  */
 router.get('/fuel/:id/report', async (req, res) => {
   const { begintime, endtime } = dateRange(req);
-  const type = req.query.type || 'summary';
-  const data = await cms.getFuelReport(req.params.id, begintime, endtime, type);
-  ok(res, data, { period: { begintime, endtime }, reportType: type });
+  // Resolve devIdno from plate or direct devIdno
+  const vehicles = await cms.getVehicles();
+  const veh = vehicles.find(v =>
+    v.plate === req.params.id || v.nm === req.params.id || v.devIdno === req.params.id
+  );
+  const devIdno = veh?.devIdno || req.params.id;
+  // queryTrackDetail returns GPS track points with yl (fuel), sp (speed), lc (mileage)
+  const tracks = await cms.getGPSHistory(devIdno, begintime, endtime);
+  // Wrap in { infos: [...] } so normalizeFuelData in frontend recognises it
+  ok(res, { infos: tracks }, { period: { begintime, endtime }, points: tracks.length });
 });
 
 // ══════════════════════════════════════════════════════════════════════════

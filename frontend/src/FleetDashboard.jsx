@@ -1260,59 +1260,102 @@ function VehicleModal({ vehicle, onClose, onViewVideo }) {
   );
 }
 
+const CHANNEL_COUNT = 6;
+
 function VideoModal({ vehicle, onClose }) {
   const { t } = useTheme();
+  const [channel,    setChannel]    = useState(1);
+  const [streamType, setStreamType] = useState("sub");
   const [streamData, setStreamData] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+  const [loading,    setLoading]    = useState(true);
+  const [error,      setError]      = useState(null);
 
   useEffect(() => {
     if (!vehicle) return;
-    setLoading(true); setError(null);
-    apiFetch(`/cameras/${encodeURIComponent(vehicle.devIdno)}/stream`)
+    setLoading(true); setError(null); setStreamData(null);
+    apiFetch(`/cameras/${encodeURIComponent(vehicle.devIdno)}/stream?channel=${channel}&streamType=${streamType}`)
       .then(setStreamData)
       .catch(e => setError(e.message))
       .finally(() => setLoading(false));
-  }, [vehicle]);
+  }, [vehicle, channel, streamType]);
 
   if (!vehicle) return null;
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "#000000ee", zIndex: 2000, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }} onClick={onClose}>
-      <div style={{ width: "95vw", maxWidth: 900, background: t.panel, borderRadius: 16, overflow: "hidden", boxShadow: "0 20px 60px rgba(0,0,0,0.8)" }} onClick={e => e.stopPropagation()}>
-        <div style={{ padding: "16px 20px", display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: `1px solid ${t.border}` }}>
+      <div style={{ width: "95vw", maxWidth: 1000, background: t.panel, borderRadius: 16, overflow: "hidden", boxShadow: "0 20px 60px rgba(0,0,0,0.8)" }} onClick={e => e.stopPropagation()}>
+
+        {/* Header */}
+        <div style={{ padding: "14px 20px", display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: `1px solid ${t.border}`, background: `linear-gradient(90deg, ${t.panelBright}, ${t.panel})` }}>
           <div>
-            <div style={{ color: t.text, fontWeight: 800, fontSize: 16 }}>📹 LIVE CAMERA — {vehicle.plate || vehicle.nm}</div>
-            <div style={{ color: t.textSoft, fontSize: 11 }}>Channel 1 (Primary Feed) · {vehicle.devIdno}</div>
+            <div style={{ color: t.text, fontWeight: 800, fontSize: 16 }}>📹 {vehicle.plate || vehicle.nm}</div>
+            <div style={{ color: t.textSoft, fontSize: 11 }}>Ch {channel} · {streamType === "main" ? "Main Stream" : "Sub Stream"} · {vehicle.devIdno}</div>
           </div>
-          <button onClick={onClose} style={{ background: t.bgAlt, border: "none", color: t.text, width: 32, height: 32, borderRadius: "50%", cursor: "pointer", fontSize: 20 }}>×</button>
+          <button onClick={onClose} style={{ background: t.bgAlt, border: "none", color: t.text, width: 32, height: 32, borderRadius: "50%", cursor: "pointer", fontSize: 20, display: "flex", alignItems: "center", justifyContent: "center" }}>×</button>
         </div>
-        
-        <div style={{ position: "relative", minHeight: 500, background: "#000", display: "flex", alignItems: "center", justifyContent: "center" }}>
-          {loading && <Spinner label="Initializing secure connection..." />}
+
+        {/* Channel + stream type selector */}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 20px", borderBottom: `1px solid ${t.border}`, background: t.bgAlt, flexWrap: "wrap" }}>
+          <span style={{ color: t.muted, fontSize: 12, fontWeight: 600 }}>CHANNEL:</span>
+          {Array.from({ length: CHANNEL_COUNT }, (_, i) => i + 1).map(ch => (
+            <button key={ch} onClick={() => setChannel(ch)} style={{
+              background: channel === ch ? `linear-gradient(135deg, ${t.accent}, ${t.accentAlt})` : t.panel,
+              border: `1px solid ${channel === ch ? "transparent" : t.border}`,
+              borderRadius: 8, padding: "5px 14px", color: channel === ch ? "#fff" : t.textSoft,
+              cursor: "pointer", fontWeight: channel === ch ? 700 : 400, fontSize: 13,
+              boxShadow: channel === ch ? `0 2px 10px ${t.accentGlow}` : "none",
+              fontFamily: "inherit",
+            }}>CH {ch}</button>
+          ))}
+          <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+            {["sub", "main"].map(st => (
+              <button key={st} onClick={() => setStreamType(st)} style={{
+                background: streamType === st ? t.accentSoft : "transparent",
+                border: `1px solid ${streamType === st ? t.accent : t.border}`,
+                borderRadius: 8, padding: "5px 12px", color: streamType === st ? t.accent : t.muted,
+                cursor: "pointer", fontSize: 12, fontWeight: streamType === st ? 700 : 400,
+                fontFamily: "inherit",
+              }}>{st === "sub" ? "Sub" : "Main"}</button>
+            ))}
+          </div>
+        </div>
+
+        {/* Video area */}
+        <div style={{ position: "relative", minHeight: 480, background: "#000", display: "flex", alignItems: "center", justifyContent: "center" }}>
+          {loading && <Spinner label={`Connecting to channel ${channel}…`} />}
           {error && <div style={{ padding: 40 }}><ErrorBanner message={error} /></div>}
-          
+
           {!loading && !error && streamData?.playerUrl && (
-            <iframe 
+            <iframe
+              key={`${channel}-${streamType}`}
               src={streamData.playerUrl}
-              style={{ width: "100%", height: "70vh", border: "none" }}
+              style={{ width: "100%", height: "68vh", border: "none" }}
               allow="autoplay; fullscreen"
+              title={`Camera Ch${channel}`}
             />
           )}
-          
+
           {!loading && !error && !streamData?.playerUrl && (
-            <div style={{ color: "#fff", padding: 40, textAlign: "center" }}>
-              <div style={{ fontSize: 40, marginBottom: 16 }}>⚠️</div>
-              <div>Camera feed unavailable. Verify vehicle is online and device supports video.</div>
+            <div style={{ color: "#aaa", padding: 40, textAlign: "center" }}>
+              <div style={{ fontSize: 40, marginBottom: 16 }}>📷</div>
+              <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 8 }}>Channel {channel} unavailable</div>
+              <div style={{ fontSize: 12 }}>Vehicle may be offline or this channel has no camera installed.</div>
             </div>
           )}
         </div>
-        
-        <div style={{ padding: "14px 20px", background: t.bgAlt, display: "flex", gap: 12, justifyContent: "center" }}>
+
+        {/* Footer links */}
+        <div style={{ padding: "12px 20px", background: t.bgAlt, display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap" }}>
           {streamData?.hlsPageUrl && (
-             <Btn color={t.blue} outline onClick={() => window.open(streamData.hlsPageUrl, "_blank")} style={{ fontSize: 11 }}>📱 Open Mobile Stream</Btn>
+            <Btn color={t.blue} outline onClick={() => window.open(streamData.hlsPageUrl, "_blank")} style={{ fontSize: 11 }}>📱 Mobile HLS</Btn>
           )}
-          <Btn onClick={onClose} style={{ fontSize: 11 }}>Close Player</Btn>
+          {streamData?.hlsUrl && (
+            <Btn color={t.purple} outline onClick={() => navigator.clipboard?.writeText(streamData.hlsUrl)} style={{ fontSize: 11 }}>📋 Copy HLS URL</Btn>
+          )}
+          {streamData?.rtspUrl && (
+            <Btn color={t.green} outline onClick={() => navigator.clipboard?.writeText(streamData.rtspUrl)} style={{ fontSize: 11 }}>📋 Copy RTSP</Btn>
+          )}
+          <Btn onClick={onClose} style={{ fontSize: 11 }}>Close</Btn>
         </div>
       </div>
     </div>
