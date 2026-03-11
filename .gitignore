@@ -1,0 +1,17 @@
+node_modules/
+.env
+.DS_Store
+dist/
+build/
+*.log
+.claude/
+.gemini/
+server.txt
+Active Security Cloud Platform.txt
+{middleware/
+dashboard/
+frontend/dist/
+frontend/node_modules/
+middleware/node_modules/
+middleware/.env
+frontend/.env
