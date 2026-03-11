@@ -18,7 +18,7 @@ require('dotenv').config();
 const logger = require('../utils/logger');
 const cms    = require('./cmsv6.service');
 const sms    = require('./sms.service');
-const { monitor, getDailyStats, getLastNonZeroFuel, getTotalFuelDuringOff } = require('./monitor.service');
+const { monitor, getDailyStats, getLastNonZeroFuel, getTotalFuelDuringOff } = require('./monitor.service'); // getDailyStats used for fuelStartOfDay fallback
 
 const TIMEZONE = process.env.FLEET_TIMEZONE || 'Africa/Dar_es_Salaam';
 const COMPANY  = process.env.COMPANY_NAME   || 'Star Link Fleet';
@@ -48,21 +48,59 @@ function msUntilNextPhase() {
   return Math.max(diffMs, 0);
 }
 
-function getPhaseName() {
+// Returns the phase that JUST ENDED (fires at 08:05→night ended, 16:05→day ended, 00:05→evening ended)
+function getPhaseInfo() {
   const tzStr = new Date().toLocaleString('en-US', { timeZone: TIMEZONE });
-  const h = new Date(tzStr).getHours();
-  if (h < 8)  return 'NIGHT REPORT (00:00–07:59)';
-  if (h < 16) return 'DAY REPORT (08:00–15:59)';
-  return 'EVENING REPORT (16:00–23:59)';
+  const tzDate = new Date(tzStr);
+  const h = tzDate.getHours();
+  const today = tzDate.toLocaleDateString('en-CA'); // YYYY-MM-DD
+  const yd    = new Date(tzDate); yd.setDate(yd.getDate() - 1);
+  const yesterday = yd.toLocaleDateString('en-CA');
+  // h>=8 && h<16 → fired at 08:05, night window (00:00–07:59) just ended
+  // h>=16        → fired at 16:05, day window  (08:00–15:59) just ended
+  // h<8          → fired at 00:05, evening window (16:00–23:59) of yesterday just ended
+  if (h >= 8 && h < 16) return { name: 'NIGHT REPORT (00:00–07:59)',   begin: `${today} 00:00:00`,     end: `${today} 07:59:59`     };
+  if (h >= 16)           return { name: 'DAY REPORT (08:00–15:59)',     begin: `${today} 08:00:00`,     end: `${today} 15:59:59`     };
+  return                        { name: 'EVENING REPORT (16:00–23:59)', begin: `${yesterday} 16:00:00`, end: `${yesterday} 23:59:59` };
+}
+
+// Calculate real ACC-ON uptime from GPS track points within a time window
+// Uses the 'ac' bit field (bit0=1 → ACC ON) from queryTrackDetail track points
+async function calcWindowUptime(devIdno, begintime, endtime) {
+  try {
+    const tracks = await cms.getGPSHistory(devIdno, begintime, endtime);
+    if (!Array.isArray(tracks) || tracks.length < 2) return 0;
+    const sorted = tracks.filter(p => p.gt).sort((a, b) => new Date(a.gt) - new Date(b.gt));
+    let secs = 0;
+    for (let i = 0; i < sorted.length - 1; i++) {
+      if ((sorted[i].ac & 1) === 1) {
+        const dt = (new Date(sorted[i + 1].gt) - new Date(sorted[i].gt)) / 1000;
+        if (dt > 0 && dt < 3600) secs += dt; // skip gaps >1hr (offline/no-signal)
+      }
+    }
+    return Math.round(secs);
+  } catch (e) {
+    logger.warn(`[Report] calcWindowUptime failed for ${devIdno}: ${e.message}`);
+    return 0;
+  }
 }
 
 // ── Build full report data ────────────────────────────────────────────────────
 
-async function buildReport() {
+async function buildReport(manual = false) {
   const now          = Date.now();
   const dailyStats   = getDailyStats();
   const lastFuelMap  = getLastNonZeroFuel();
   const fuelDuringOffMap = getTotalFuelDuringOff();
+
+  // Determine uptime calculation window
+  // Manual: from start of day to now. Scheduled: the phase window that just ended.
+  const phaseInfo = getPhaseInfo();
+  const todayLocal = new Date().toLocaleString('sv', { timeZone: TIMEZONE }).slice(0, 10);
+  const nowLocal   = new Date().toLocaleString('sv', { timeZone: TIMEZONE }).slice(0, 19);
+  const uptimeWindow = manual
+    ? { begin: `${todayLocal} 00:00:00`, end: nowLocal }
+    : { begin: phaseInfo.begin, end: phaseInfo.end };
 
   const [vehicles, statuses] = await Promise.all([
     cms.getVehicles(),
@@ -75,12 +113,18 @@ async function buildReport() {
     if (id) statusMap[id] = s;
   }
 
+  // Fetch real uptime from GPS tracks for all vehicles in parallel
+  const uptimeSecs_list = await Promise.all(
+    vehicles.map(v => calcWindowUptime(v.devIdno, uptimeWindow.begin, uptimeWindow.end))
+  );
+
   const vehicleReports = [];
   let totalUptimeSecs  = 0;
   let totalFuelUsed    = 0;
   let countOn = 0, countOff = 0, countOffline = 0;
 
-  for (const v of vehicles) {
+  for (let i = 0; i < vehicles.length; i++) {
+    const v     = vehicles[i];
     const id    = v.devIdno;
     const s     = statusMap[id] || {};
     const stats = dailyStats[id];
@@ -90,8 +134,6 @@ async function buildReport() {
     const accOn   = s.accOn  ?? false;
     const online  = s.ol     ?? 0;
     const speed   = s.speed  ?? 0;
-    const lat     = s.lat    ?? null;
-    const lng     = s.lng    ?? null;
     const todayKm = s.todayKm ?? null;
 
     // Use last non-zero fuel as fallback when sensor reads 0 or null
@@ -100,11 +142,8 @@ async function buildReport() {
                   : (lastFuelMap[id] != null ? lastFuelMap[id] : rawFuel);
     const fuelEstimated = (rawFuel === 0 || rawFuel == null) && lastFuelMap[id] != null;
 
-    // Current uptime: banked seconds + any live session
-    let uptimeSecs = stats?.totalUptimeSecs ?? 0;
-    if (stats?.lastAccOnTime) {
-      uptimeSecs += Math.round((now - stats.lastAccOnTime) / 1000);
-    }
+    // Real uptime from GPS track points for the relevant window
+    const uptimeSecs = uptimeSecs_list[i];
 
     const fuelStart = stats?.fuelStartOfDay ?? null;
     const fuelUsed  = (fuelStart != null && fuel != null && fuelStart > fuel)
@@ -118,7 +157,7 @@ async function buildReport() {
 
     vehicleReports.push({
       plate, name, accOn, online, fuel, fuelEstimated, fuelStart, fuelUsed,
-      uptimeSecs, speed, lat, lng, todayKm, devIdno: id,
+      uptimeSecs, speed, todayKm, devIdno: id,
       fuelDuringOff: fuelDuringOffMap[id] || 0,
     });
   }
@@ -129,19 +168,24 @@ async function buildReport() {
     hour: '2-digit', minute: '2-digit',
   });
 
+  const reportLabel = manual
+    ? `MANUAL PULL REPORT (00:00–${nowLocal.slice(11, 16)})`
+    : phaseInfo.name;
+
   return {
-    type: 'hourly_report',
-    time: new Date(now).toISOString(),
+    type:      'hourly_report',
+    time:      new Date(now).toISOString(),
     timeStr,
-    phaseName: getPhaseName(),
+    phaseName: reportLabel,
+    uptimeWindow,
     vehicleReports,
     totals: {
-      vehicles:        vehicles.length,
-      on:              countOn,
-      off:             countOff,
-      offline:         countOffline,
+      vehicles:           vehicles.length,
+      on:                 countOn,
+      off:                countOff,
+      offline:            countOffline,
       totalUptimeSecs,
-      totalFuelUsed:   r1(totalFuelUsed),
+      totalFuelUsed:      r1(totalFuelUsed),
       totalFuelDuringOff: r1(Object.values(fuelDuringOffMap).reduce((a, b) => a + b, 0)),
     },
   };
@@ -178,7 +222,7 @@ function formatVehicleSMS(v, timeStr, phaseName) {
 async function sendReport(sendSms = true, manual = false) {
   logger.info(`[Report] Generating fleet report… (SMS: ${sendSms})`);
   try {
-    const report = await buildReport();
+    const report = await buildReport(manual);
 
     // 1. Push full report to all SSE / dashboard clients
     if (manual) report._manual = true;
