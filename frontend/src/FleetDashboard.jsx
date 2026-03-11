@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef, createContext, useContext } from "react";
 
 // ── API Config ────────────────────────────────────────────────────────────────
-const API_BASE = "http://localhost:3000/api";
+const API_BASE = "/api";
 const API_KEY  = "hshfd24d7998476hfbvvhfbh";
 
 async function apiFetch(path, opts = {}) {
