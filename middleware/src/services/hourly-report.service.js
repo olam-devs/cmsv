@@ -35,15 +35,15 @@ function fmtDur(secs) {
 
 function r1(v) { return Math.round(v * 10) / 10; }
 
-// ms until the next :30 mark of any hour (e.g. 1:30, 2:30, 15:30 …)
-function msUntilNextHalfHour() {
+// ms until the next :05 mark of any hour (e.g. 1:05, 2:05, 15:05 …)
+function msUntilNextHourAndFive() {
   const now  = new Date();
   const mins = now.getMinutes();
   const next = new Date(now);
-  if (mins < 30) {
-    next.setMinutes(30, 0, 0);
+  if (mins < 5) {
+    next.setMinutes(5, 0, 0);
   } else {
-    next.setHours(now.getHours() + 1, 30, 0, 0);
+    next.setHours(now.getHours() + 1, 5, 0, 0);
   }
   return Math.max(next.getTime() - now.getTime(), 0);
 }
@@ -195,11 +195,11 @@ let intervalTimer  = null;
 function start() {
   if (intervalTimer) return;
 
-  const delay = msUntilNextHalfHour();
+  const delay = msUntilNextHourAndFive();
   const mins  = Math.round(delay / 60000);
   const secs  = Math.round((delay % 60000) / 1000);
 
-  logger.info(`[Report] Scheduler started — first report in ${mins}m ${secs}s, then every hour at :30`);
+  logger.info(`[Report] Scheduler started — first report in ${mins}m ${secs}s, then every hour at :05`);
 
   initialTimeout = setTimeout(() => {
     sendReport();
