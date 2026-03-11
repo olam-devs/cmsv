@@ -15,7 +15,7 @@ require('dotenv').config();
 const axios  = require('axios');
 const logger = require('../utils/logger');
 
-const API_URL   = process.env.SMS_API_URL    || 'https://messaging-service.co.tz/api/mobile/v2/text/single';
+const API_URL   = process.env.SMS_API_URL    || 'https://messaging-service.co.tz/api/sms/v2/text/single';
 const API_TOKEN = process.env.SMS_API_TOKEN;
 const SENDER    = process.env.SMS_SENDER_NAME || 'DARASA 360';
 const ENABLED   = process.env.SMS_ENABLED !== 'false';
@@ -76,7 +76,7 @@ function formatMessage(evt) {
 
 async function sendToAll(recipients, message, reference = 'fleet') {
   const to      = recipients.length === 1 ? recipients[0] : recipients;
-  const payload = { to, text: message, reference };
+  const payload = { from: SENDER, to, text: message, reference };
 
   logger.info(`[SMS] POST ${API_URL} → ${recipients.join(', ')}`);
 
