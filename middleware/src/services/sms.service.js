@@ -15,7 +15,7 @@ require('dotenv').config();
 const axios  = require('axios');
 const logger = require('../utils/logger');
 
-const API_URL   = process.env.SMS_API_URL    || 'https://messaging-service.co.tz/api/sms/send';
+const API_URL   = process.env.SMS_API_URL    || 'https://messaging-service.co.tz/api/mobile/v2/text/single';
 const API_TOKEN = process.env.SMS_API_TOKEN;
 const SENDER    = process.env.SMS_SENDER_NAME || 'DARASA 360';
 const ENABLED   = process.env.SMS_ENABLED !== 'false';
@@ -69,19 +69,16 @@ function formatMessage(evt) {
   return lines.join('\n');
 }
 
-// ── Core send — messaging-service.co.tz API format ───────────────────────────
+// ── Core send — messaging-service.co.tz Mobile SMS API v2 ────────────────────
+// Sends the same message to all recipients in one API call.
+// API docs: POST /api/mobile/v2/text/single
+// Payload:  { to: "255..." | ["255...", "255..."], text: "...", reference: "..." }
 
-async function sendOne(destAddr, message, recipientId = 1) {
-  const payload = {
-    source_addr:   SENDER,
-    schedule_time: '',
-    message,
-    recipients: [
-      { recipient_id: recipientId, dest_addr: destAddr },
-    ],
-  };
+async function sendToAll(recipients, message, reference = 'fleet') {
+  const to      = recipients.length === 1 ? recipients[0] : recipients;
+  const payload = { to, text: message, reference };
 
-  logger.info(`[SMS] POST ${API_URL} → recipient: ${destAddr}`);
+  logger.info(`[SMS] POST ${API_URL} → ${recipients.join(', ')}`);
 
   const res = await axios.post(API_URL, payload, {
     headers: {
@@ -111,26 +108,21 @@ async function sendAccEvent(evt) {
     return;
   }
 
-  const message = evt._smsMessage || formatMessage(evt);
-  const icon    = evt.type === 'acc_on' ? '🟢' : evt.type === 'acc_off' ? '🔴' : '📊';
+  const message   = evt._smsMessage || formatMessage(evt);
+  const reference = `fleet-${evt.type || 'event'}-${Date.now()}`;
+  const icon      = evt.type === 'acc_on' ? '🟢' : evt.type === 'acc_off' ? '🔴' : '📊';
 
   logger.info(`[SMS] ${icon} Sending "${evt.type}" to ${recipients.length} recipient(s)`);
   logger.info(`[SMS] Message preview: ${message.split('\n')[0]}…`);
 
-  const results = await Promise.allSettled(
-    recipients.map((r, i) => sendOne(r, message, i + 1)),
-  );
-
-  for (let i = 0; i < results.length; i++) {
-    const r = results[i];
-    if (r.status === 'fulfilled') {
-      logger.info(`[SMS] ✓ Delivered to ${recipients[i]} — ${JSON.stringify(r.value)}`);
-    } else {
-      // Log full error detail to help diagnose API issues
-      const errData = r.reason?.response?.data;
-      const errMsg  = errData ? JSON.stringify(errData) : (r.reason?.message || String(r.reason));
-      logger.error(`[SMS] ✗ Failed to ${recipients[i]}: ${errMsg}`);
-    }
+  try {
+    const result = await sendToAll(recipients, message, reference);
+    logger.info(`[SMS] ✓ Sent — ${JSON.stringify(result)}`);
+  } catch (e) {
+    const errData = e?.response?.data;
+    const errMsg  = errData ? JSON.stringify(errData) : (e?.message || String(e));
+    logger.error(`[SMS] ✗ Failed: ${errMsg}`);
+    throw e;
   }
 }
 
