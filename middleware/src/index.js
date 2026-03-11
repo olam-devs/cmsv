@@ -13,6 +13,7 @@ const chatRoute   = require('./routes/chat');
 const eventsRoute    = require('./routes/events');
 const monitor        = require('./services/monitor.service');
 const hourlyReport   = require('./services/hourly-report.service');
+const path           = require('path');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -22,6 +23,10 @@ app.use(helmet());
 app.use(cors());
 app.use(express.json());
 app.use(morgan('combined', { stream: { write: (msg) => logger.info(msg.trim()) } }));
+
+// ── Serve Frontend ────────────────────────────────────────────────────────
+const distPath = path.join(__dirname, '../../frontend/dist');
+app.use(express.static(distPath));
 
 // Rate limiter
 app.use(rateLimit({
@@ -83,9 +88,9 @@ app.use('/api', auth);
 app.use('/api', fleetRoutes);
 app.use('/api/chat', chatRoute);
 
-// ── 404 ──────────────────────────────────────────────────────────────────
-app.use((req, res) => {
-  res.status(404).json({ success: false, message: `Route ${req.method} ${req.path} not found` });
+// ── SPA Fallback (serve index.html for unknown routes) ────────────────────
+app.get('*', (req, res) => {
+  res.sendFile(path.join(distPath, 'index.html'));
 });
 
 // ── Error handler ─────────────────────────────────────────────────────────
