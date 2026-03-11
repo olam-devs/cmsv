@@ -13,9 +13,13 @@
  */
 
 const EventEmitter = require('events');
+const path = require('path');
+const fs = require('fs');
 const logger = require('../utils/logger');
 const cms    = require('./cmsv6.service');
 const sms    = require('./sms.service');
+
+const STATE_FILE = path.join(__dirname, '../../../data/monitor-state.json');
 
 const POLL_INTERVAL = parseInt(process.env.MONITOR_POLL_MS) || 15000; // 15 s
 const TIMEZONE      = process.env.FLEET_TIMEZONE || 'Africa/Dar_es_Salaam';
@@ -55,10 +59,11 @@ function ensureDailyStats(id, now) {
     // New day — reset; if engine was on carry the on-time forward
     const wasOn = dailyStats[id]?.lastAccOnTime != null;
     dailyStats[id] = {
-      date:            today,
-      fuelStartOfDay:  null,
-      totalUptimeSecs: 0,
-      lastAccOnTime:   wasOn ? now : null, // if engine stayed on overnight, start counting from midnight
+      date:                   today,
+      fuelStartOfDay:         null,
+      totalUptimeSecs:        0,
+      totalFuelConsumedDuringOff: 0,
+      lastAccOnTime:          wasOn ? now : null, // if engine stayed on overnight, start counting from midnight
     };
   }
   return dailyStats[id];
@@ -77,6 +82,30 @@ function pushHistory(evt) {
 class MonitorEmitter extends EventEmitter {}
 const monitor = new MonitorEmitter();
 monitor.setMaxListeners(200); // support many SSE clients
+
+// ── State persistence (survives middleware restarts) ──────────────────────────
+function saveState() {
+  try {
+    const dir = path.dirname(STATE_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(STATE_FILE, JSON.stringify({ dailyStats, eventHistory, lastNonZeroFuel }, null, 2));
+  } catch (e) {
+    logger.warn('[Monitor] State save failed: ' + e.message);
+  }
+}
+
+function loadState() {
+  try {
+    if (!fs.existsSync(STATE_FILE)) return;
+    const raw = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
+    if (raw.dailyStats) Object.assign(dailyStats, raw.dailyStats);
+    if (raw.eventHistory) eventHistory.push(...raw.eventHistory.slice(0, MAX_HISTORY));
+    if (raw.lastNonZeroFuel) Object.assign(lastNonZeroFuel, raw.lastNonZeroFuel);
+    logger.info('[Monitor] State loaded from disk');
+  } catch (e) {
+    logger.warn('[Monitor] State load failed: ' + e.message);
+  }
+}
 
 // ── Core poll ─────────────────────────────────────────────────────────────────
 async function poll() {
@@ -135,6 +164,8 @@ async function poll() {
 
     if (accOn) {
       // OFF → ON: downtime = how long engine was OFF (parked)
+      const fuelConsumedDuringOff = (prev.fuelAtChange != null && fuel != null && prev.fuelAtChange > fuel)
+        ? round1(prev.fuelAtChange - fuel) : null;
       evt = {
         type:         'acc_on',
         plate,
@@ -144,7 +175,9 @@ async function poll() {
         time:         new Date(now).toISOString(),
         downtimeSecs: durationSecs,
         downtimeStr:  formatDuration(durationSecs),
+        fuelConsumedDuringOff,
       };
+      if (fuelConsumedDuringOff != null) stats.totalFuelConsumedDuringOff += fuelConsumedDuringOff;
     } else {
       // ON → OFF: uptime = how long engine was ON (running)
       const fuelUsed = (prev.fuelAtChange != null && fuel != null)
@@ -199,12 +232,16 @@ let pollTimer = null;
 
 function start() {
   if (pollTimer) return;
+  loadState();
   logger.info(`[Monitor] ACC monitor started — polling every ${POLL_INTERVAL / 1000}s`);
   poll(); // immediate first run
   pollTimer = setInterval(poll, POLL_INTERVAL);
+  // Save state every 2 minutes
+  setInterval(saveState, 2 * 60 * 1000);
 }
 
 function stop() {
+  saveState();
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
   logger.info('[Monitor] ACC monitor stopped');
 }
@@ -216,5 +253,6 @@ function getHistory(limit = 50) {
 function getDailyStats()      { return dailyStats; }
 function getVehicleState()   { return vehicleState; }
 function getLastNonZeroFuel() { return lastNonZeroFuel; }
+function getTotalFuelDuringOff() { return Object.fromEntries(Object.entries(dailyStats).map(([id, s]) => [id, s.totalFuelConsumedDuringOff || 0])); }
 
-module.exports = { monitor, start, stop, getHistory, getDailyStats, getVehicleState, getLastNonZeroFuel };
+module.exports = { monitor, start, stop, getHistory, getDailyStats, getVehicleState, getLastNonZeroFuel, getTotalFuelDuringOff };

@@ -52,6 +52,8 @@ function formatMessage(evt) {
     ];
     if (evt.fuel != null)   lines.push(`Fuel    : ${evt.fuel} units`);
     if (evt.downtimeStr)    lines.push(`Parked  : ${evt.downtimeStr}`);
+    if (evt.fuelConsumedDuringOff != null && evt.fuelConsumedDuringOff > 0)
+      lines.push(`Off-consumption: -${evt.fuelConsumedDuringOff}L`);
     return lines.join('\n');
   }
 

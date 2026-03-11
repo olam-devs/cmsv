@@ -466,6 +466,13 @@ router.get('/fleet/report/trigger', async (req, res) => {
   ok(res, { message: 'To trigger a report, use POST to this endpoint' });
 });
 
+/** GET /api/events/history — Last N monitor events (for frontend on load) */
+router.get('/events/history', (req, res) => {
+  const { monitor, getHistory } = require('../services/monitor.service');
+  const limit = Math.min(parseInt(req.query.limit) || 100, 200);
+  ok(res, getHistory(limit));
+});
+
 /** GET /api/reports/mileage/:id?begintime=...&endtime=... */
 router.get('/reports/mileage/:id', async (req, res) => {
   const { begintime, endtime } = dateRange(req);

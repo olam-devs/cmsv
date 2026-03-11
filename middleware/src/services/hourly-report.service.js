@@ -18,11 +18,10 @@ require('dotenv').config();
 const logger = require('../utils/logger');
 const cms    = require('./cmsv6.service');
 const sms    = require('./sms.service');
-const { monitor, getDailyStats, getLastNonZeroFuel } = require('./monitor.service');
+const { monitor, getDailyStats, getLastNonZeroFuel, getTotalFuelDuringOff } = require('./monitor.service');
 
 const TIMEZONE = process.env.FLEET_TIMEZONE || 'Africa/Dar_es_Salaam';
 const COMPANY  = process.env.COMPANY_NAME   || 'Star Link Fleet';
-const INTERVAL = 60 * 60 * 1000; // 1 hour
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -35,17 +34,26 @@ function fmtDur(secs) {
 
 function r1(v) { return Math.round(v * 10) / 10; }
 
-// ms until the next :05 mark of any hour (e.g. 1:05, 2:05, 15:05 …)
-function msUntilNextHourAndFive() {
-  const now  = new Date();
-  const mins = now.getMinutes();
-  const next = new Date(now);
-  if (mins < 5) {
-    next.setMinutes(5, 0, 0);
-  } else {
-    next.setHours(now.getHours() + 1, 5, 0, 0);
-  }
-  return Math.max(next.getTime() - now.getTime(), 0);
+// Returns ms until next phase boundary (00:05, 08:05, or 16:05 in fleet timezone)
+function msUntilNextPhase() {
+  const now = new Date();
+  const tzStr = now.toLocaleString('en-US', { timeZone: TIMEZONE });
+  const tzDate = new Date(tzStr);
+  const totalMins = tzDate.getHours() * 60 + tzDate.getMinutes();
+  const phaseMins = [5, 8 * 60 + 5, 16 * 60 + 5]; // 00:05, 08:05, 16:05
+  const nextMins = phaseMins.find(p => p > totalMins) ?? (24 * 60 + 5);
+  const diffMs = (nextMins - totalMins) * 60 * 1000
+               - tzDate.getSeconds() * 1000
+               - tzDate.getMilliseconds();
+  return Math.max(diffMs, 0);
+}
+
+function getPhaseName() {
+  const tzStr = new Date().toLocaleString('en-US', { timeZone: TIMEZONE });
+  const h = new Date(tzStr).getHours();
+  if (h < 8)  return 'NIGHT REPORT (00:00–07:59)';
+  if (h < 16) return 'DAY REPORT (08:00–15:59)';
+  return 'EVENING REPORT (16:00–23:59)';
 }
 
 // ── Build full report data ────────────────────────────────────────────────────
@@ -54,6 +62,7 @@ async function buildReport() {
   const now          = Date.now();
   const dailyStats   = getDailyStats();
   const lastFuelMap  = getLastNonZeroFuel();
+  const fuelDuringOffMap = getTotalFuelDuringOff();
 
   const [vehicles, statuses] = await Promise.all([
     cms.getVehicles(),
@@ -110,6 +119,7 @@ async function buildReport() {
     vehicleReports.push({
       plate, name, accOn, online, fuel, fuelEstimated, fuelStart, fuelUsed,
       uptimeSecs, speed, lat, lng, todayKm, devIdno: id,
+      fuelDuringOff: fuelDuringOffMap[id] || 0,
     });
   }
 
@@ -123,6 +133,7 @@ async function buildReport() {
     type: 'hourly_report',
     time: new Date(now).toISOString(),
     timeStr,
+    phaseName: getPhaseName(),
     vehicleReports,
     totals: {
       vehicles:        vehicles.length,
@@ -131,16 +142,18 @@ async function buildReport() {
       offline:         countOffline,
       totalUptimeSecs,
       totalFuelUsed:   r1(totalFuelUsed),
+      totalFuelDuringOff: r1(Object.values(fuelDuringOffMap).reduce((a, b) => a + b, 0)),
     },
   };
 }
 
 // ── Format one SMS per vehicle (kept short — fits in a single 160-char SMS) ───
 
-function formatVehicleSMS(v, timeStr) {
+function formatVehicleSMS(v, timeStr, phaseName) {
   const status = v.online === 0 ? 'OFFLINE' : v.accOn ? 'ON' : 'OFF';
   const lines  = [
     COMPANY,
+    phaseName || 'FLEET REPORT',
     `${v.name}${v.name !== v.plate ? ` (${v.plate})` : ''}`,
     `ACC:${status} | Uptime:${fmtDur(v.uptimeSecs)}`,
   ];
@@ -152,9 +165,9 @@ function formatVehicleSMS(v, timeStr) {
   if (v.fuelUsed  != null) fuelParts.push(`Used:${v.fuelUsed}`);
   if (fuelParts.length)    lines.push(`Fuel ${fuelParts.join(' ')}`);
 
+  if (v.fuelDuringOff > 0) lines.push(`Off-consumption:-${v.fuelDuringOff}L`);
   if (v.todayKm   != null && v.todayKm > 0) lines.push(`Distance today:${v.todayKm.toFixed(1)}km`);
   if (v.speed > 0)         lines.push(`Speed:${v.speed}km/h`);
-  if (v.lat && v.lng)      lines.push(`Loc:${v.lat.toFixed(4)},${v.lng.toFixed(4)}`);
 
   lines.push(timeStr);
   return lines.join('\n');
@@ -175,7 +188,7 @@ async function sendReport(sendSms = true, manual = false) {
     // 2. Conditionally send one SMS per vehicle
     if (sendSms) {
       for (const v of report.vehicleReports) {
-        const message = formatVehicleSMS(v, report.timeStr);
+        const message = formatVehicleSMS(v, report.timeStr, report.phaseName || 'FLEET REPORT');
         await sms.sendAccEvent({ ...report, _smsMessage: message })
           .catch(e => logger.error(`[Report] SMS failed for ${v.plate}: ${e.message}`));
       }
@@ -189,27 +202,25 @@ async function sendReport(sendSms = true, manual = false) {
 
 // ── Scheduler ─────────────────────────────────────────────────────────────────
 
-let initialTimeout = null;
-let intervalTimer  = null;
+let scheduleTimer = null;
 
-function start() {
-  if (intervalTimer) return;
-
-  const delay = msUntilNextHourAndFive();
+function scheduleNext() {
+  const delay = msUntilNextPhase();
   const mins  = Math.round(delay / 60000);
-  const secs  = Math.round((delay % 60000) / 1000);
-
-  logger.info(`[Report] Scheduler started — first report in ${mins}m ${secs}s, then every hour at :05`);
-
-  initialTimeout = setTimeout(() => {
+  logger.info(`[Report] Next phase report in ${mins}m (${getPhaseName()})`);
+  scheduleTimer = setTimeout(() => {
     sendReport();
-    intervalTimer = setInterval(sendReport, INTERVAL);
+    scheduleNext();
   }, delay);
 }
 
+function start() {
+  if (scheduleTimer) return;
+  scheduleNext();
+}
+
 function stop() {
-  if (initialTimeout) { clearTimeout(initialTimeout);  initialTimeout = null; }
-  if (intervalTimer)  { clearInterval(intervalTimer);  intervalTimer  = null; }
+  if (scheduleTimer) { clearTimeout(scheduleTimer); scheduleTimer = null; }
   logger.info('[Report] Scheduler stopped');
 }
 

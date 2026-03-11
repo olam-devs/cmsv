@@ -513,12 +513,14 @@ function normalizeFuelData(raw) {
     .map(r => {
       const timeStr = r.gt || r.gpsTime || r.time || r.t || "";
       const ts = timeStr ? new Date(timeStr.replace(" ", "T")).getTime() : NaN;
+      const accRaw = r.ac != null ? r.ac : (r.accOn != null ? (r.accOn ? 1 : 0) : null);
       return {
         time:    ts,
         timeStr,
         fuel:    r.yl != null ? r.yl / 100 : (r.fuelValue ?? r.oil ?? null),
         speed:   r.sp != null ? r.sp / 10  : (r.speed ?? 0),
         mileage: r.lc != null ? r.lc / 1000 : (r.mileage ?? 0),
+        accOn:   accRaw != null ? (accRaw & 1) === 1 : null,
       };
     })
     .filter(r => !isNaN(r.time) && r.fuel != null)
@@ -730,7 +732,7 @@ function FuelConsumptionView({ vehicles }) {
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                 <thead>
                   <tr style={{ background: t.bgAlt, position: "sticky", top: 0 }}>
-                    {["Time", "Fuel (units)", "Δ Fuel", "Speed (km/h)", "Mileage (km)", "Event"].map(h => (
+                    {["Time", "Fuel (units)", "Δ Fuel", "Speed (km/h)", "Mileage (km)", "ACC", "Event"].map(h => (
                       <th key={h} style={{ padding: "10px 14px", textAlign: "left", color: t.textSoft, fontFamily: "inherit", fontSize: 11, fontWeight: 700, letterSpacing: 0.8, textTransform: "uppercase", borderBottom: `1px solid ${t.border}`, whiteSpace: "nowrap" }}>{h}</th>
                     ))}
                   </tr>
@@ -751,6 +753,9 @@ function FuelConsumptionView({ vehicles }) {
                           {r.speed.toFixed(1)}
                         </td>
                         <td style={{ padding: "8px 14px", fontFamily: "inherit", color: t.textSoft }}>{r.mileage.toFixed(2)}</td>
+                        <td style={{ padding: "8px 14px", fontFamily: "inherit", fontWeight: 700, color: r.accOn === true ? "#00b341" : r.accOn === false ? "#e53e3e" : t.muted }}>
+                          {r.accOn === true ? "ON" : r.accOn === false ? "OFF" : "—"}
+                        </td>
                         <td style={{ padding: "8px 14px" }}>
                           {ev && <Badge text={ev.type === "refuel" ? `⛽ +${ev.value}L` : `⚠ -${ev.value}L`} color={ev.type === "refuel" ? t.green : t.red} />}
                         </td>
@@ -1561,12 +1566,10 @@ function EngineEventCard({ e }) {
             <div style={{ color: t.accent, fontWeight: 700, fontSize: 13 }}>🚀 {e.speed} km/h</div>
           </div>
         )}
-        {e.lat != null && e.lng != null && (
-          <div style={{ background: t.bg, borderRadius: 8, padding: "8px 10px", border: `1px solid ${t.border}`, gridColumn: "span 2" }}>
-            <div style={{ color: t.muted, fontSize: 10, marginBottom: 2 }}>GPS LOCATION</div>
-            <div style={{ color: t.blue, fontWeight: 600, fontSize: 12 }}>
-              📍 {Number(e.lat).toFixed(5)}, {Number(e.lng).toFixed(5)}
-            </div>
+        {e.type === "acc_on" && e.fuelConsumedDuringOff != null && e.fuelConsumedDuringOff > 0 && (
+          <div style={{ background: t.bg, borderRadius: 8, padding: "8px 10px", border: `1px solid ${t.orange}30` }}>
+            <div style={{ color: t.muted, fontSize: 10, marginBottom: 2 }}>OFF-CONSUMPTION</div>
+            <div style={{ color: t.orange, fontWeight: 700, fontSize: 13 }}>⛽ -{e.fuelConsumedDuringOff}L</div>
           </div>
         )}
       </div>
@@ -1584,7 +1587,7 @@ function EngineEventCard({ e }) {
 function FleetReportCard({ report }) {
   const { t } = useTheme();
   const [open, setOpen] = useState(false);
-  const { timeStr, vehicleReports = [], totals = {}, _manual } = report;
+  const { timeStr, vehicleReports = [], totals = {}, _manual, phaseName } = report;
   const isManual = !!_manual;
   const accentColor = isManual ? t.purple : t.blue;
 
@@ -1615,13 +1618,13 @@ function FleetReportCard({ report }) {
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 2 }}>
               <span style={{ color: accentColor, fontFamily: "inherit", fontWeight: 800, fontSize: 13 }}>
-                {isManual ? "MANUAL REPORT" : "HOURLY REPORT"}
+                {isManual ? `MANUAL PULL REPORT — From 00:00 to ${timeStr ? timeStr.slice(-5) : "now"}` : (phaseName || "FLEET REPORT")}
               </span>
               <span style={{
                 background: `${accentColor}20`, color: accentColor,
                 borderRadius: 4, padding: "1px 6px", fontSize: 10, fontFamily: "inherit",
               }}>
-                {isManual ? "ON-DEMAND" : ":30 AUTO"}
+                {isManual ? "ON-DEMAND" : "AUTO"}
               </span>
             </div>
             <div style={{ color: t.textSoft, fontSize: 11, fontFamily: "inherit" }}>{timeStr}</div>
@@ -1682,9 +1685,9 @@ function FleetReportCard({ report }) {
                     {v.fuelStart != null && v.fuelStart > 0 && <span style={{ color: t.textSoft }}>⛽ Start: <b style={{ color: t.text }}>{Math.round(v.fuelStart)}</b></span>}
                     {v.fuel != null && v.fuel > 0 && <span style={{ color: t.textSoft }}>⛽ Now: <b style={{ color: t.text }}>{Math.round(v.fuel)}{v.fuelEstimated && <span style={{ color: t.muted, fontSize: 9 }}> ~</span>}</b></span>}
                     {v.fuelUsed != null && <span style={{ color: t.textSoft }}>🔥 Consumed: <b style={{ color: t.red }}>{v.fuelUsed}</b></span>}
+                    {v.fuelDuringOff > 0 && <span style={{ color: t.textSoft }}>⛽ Off: <b style={{ color: t.orange }}>-{v.fuelDuringOff}L (off)</b></span>}
                     {v.todayKm != null && v.todayKm > 0 && <span style={{ color: t.textSoft }}>🛣 Today: <b style={{ color: t.blue }}>{v.todayKm.toFixed(1)} km</b></span>}
                     {v.speed > 0 && <span style={{ color: t.textSoft }}>🚀 Speed: <b style={{ color: t.text }}>{v.speed} km/h</b></span>}
-                    {v.lat && v.lng && <span style={{ color: t.textSoft }}>📍 <b style={{ color: t.blue }}>{Number(v.lat).toFixed(4)}, {Number(v.lng).toFixed(4)}</b></span>}
                     {(!v.fuel || v.fuel === 0) && <span style={{ color: t.muted, fontSize: 10 }}>⛽ No sensor</span>}
                   </div>
                 </div>
@@ -1708,7 +1711,7 @@ function FleetReportCard({ report }) {
 
 // ── Notifications Page ────────────────────────────────────────────────────────
 
-function NotificationsView({ events }) {
+function NotificationsView({ events, onClear }) {
   const { t } = useTheme();
   const [tab,           setTab]           = useState("all");
   const [selectedPlate, setSelectedPlate] = useState("all");
@@ -1761,6 +1764,13 @@ function NotificationsView({ events }) {
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <span style={{ width: 7, height: 7, borderRadius: "50%", background: t.green, display: "inline-block", animation: "pulse 2.5s infinite", boxShadow: `0 0 6px ${t.green}` }} />
             <span style={{ color: t.green, fontSize: 11, fontFamily: "inherit", fontWeight: 700, letterSpacing: 1 }}>LIVE · AUTO-UPDATING</span>
+            {events.length > 0 && onClear && (
+              <button onClick={onClear} style={{
+                background: t.redSoft, border: `1px solid ${t.red}40`,
+                borderRadius: 6, padding: "2px 10px", cursor: "pointer",
+                color: t.red, fontSize: 11, fontWeight: 700, fontFamily: "inherit",
+              }}>✕ Clear</button>
+            )}
           </div>
         </div>
 
@@ -1924,17 +1934,34 @@ function FleetDashboardContent() {
   const [lastUpdated, setLastUpdated]   = useState(new Date());
 
   // ── ACC notifications ────────────────────────────────────────────────────
-  const [accEvents,      setAccEvents]      = useState([]);
+  const [accEvents,      setAccEvents]      = useState(() => {
+    try { const stored = JSON.parse(localStorage.getItem("fleet-notifications") || "[]"); return Array.isArray(stored) ? stored : []; } catch (_) { return []; }
+  });
   const [toasts,         setToasts]         = useState([]);
   const [unreadCount,    setUnreadCount]    = useState(0);
   const toastIdRef = useRef(0);
 
   const dismissToast = useCallback((id) => setToasts(p => p.filter(tk => tk.id !== id)), []);
 
+  const clearNotifications = useCallback(() => {
+    setAccEvents([]);
+    localStorage.removeItem("fleet-notifications");
+  }, []);
+
   useEffect(() => {
     const es = new EventSource(`${API_BASE}/events?api_key=${API_KEY}`);
     es.addEventListener("history", e => {
-      try { const h = JSON.parse(e.data); if (Array.isArray(h)) setAccEvents(h); } catch (_) {}
+      try {
+        const h = JSON.parse(e.data);
+        if (Array.isArray(h)) {
+          setAccEvents(prev => {
+            // Merge history with existing localStorage events (history takes precedence if same ids)
+            const merged = [...h, ...prev].slice(0, 200);
+            localStorage.setItem("fleet-notifications", JSON.stringify(merged.slice(0, 200)));
+            return merged;
+          });
+        }
+      } catch (_) {}
     });
     es.onmessage = e => {
       try {
@@ -1942,7 +1969,11 @@ function FleetDashboardContent() {
         if (!evt.type) return;
         const id     = ++toastIdRef.current;
         const tagged = { ...evt, id };
-        setAccEvents(p => [tagged, ...p].slice(0, 200));
+        setAccEvents(p => {
+          const updated = [tagged, ...p].slice(0, 200);
+          localStorage.setItem("fleet-notifications", JSON.stringify(updated));
+          return updated;
+        });
         // Hourly report: always show toast; ACC events: up to 5 stacked
         setToasts(p => [...p, tagged].slice(-5));
         setUnreadCount(n => n + 1);
@@ -2188,7 +2219,7 @@ function FleetDashboardContent() {
             <AlarmsView alarms={alarms} loading={alarmLoading} error={alarmError}
               onRetry={() => { alarmsFetched.current = false; fetchAlarms(); }} />
           )}
-          {view === "notifs"  && <NotificationsView events={accEvents} />}
+          {view === "notifs"  && <NotificationsView events={accEvents} onClear={clearNotifications} />}
           {view === "fuel"    && <FuelConsumptionView vehicles={vehicles} />}
           {view === "fuelrpt" && <FuelDailyMonthlyView vehicles={vehicles} />}
           {view === "chat"    && <ChatView />}
