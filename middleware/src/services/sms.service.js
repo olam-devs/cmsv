@@ -43,31 +43,68 @@ function formatMessage(evt) {
     ? `${evt.vehicleName} (${evt.plate})`
     : (evt.plate || 'Unknown');
 
-  if (evt.type === 'acc_on') {
+  if (evt.type === 'vehicle_offline') {
+    return [
+      COMPANY,
+      `⚫ VEHICLE WENT OFFLINE`,
+      `Vehicle : ${vehicleLine}`,
+      `Time    : ${time}`,
+      ...(evt.fuel != null ? [`Fuel    : ${evt.fuel}`] : []),
+    ].join('\n');
+  }
+
+  if (evt.type === 'fuel_theft_suspected') {
     const lines = [
       COMPANY,
-      `ENGINE ON`,
+      `🚨 FUEL THEFT SUSPECTED`,
+      `Vehicle   : ${vehicleLine}`,
+      `Time      : ${time}`,
+      `Fuel when offline : ${evt.fuelBefore}`,
+      `Fuel now (online) : ${evt.fuelNow}`,
+      `Missing fuel      : -${evt.fuelDrop} (lost while offline)`,
+    ];
+    if (evt.offlineStr)     lines.push(`Was offline for : ${evt.offlineStr}`);
+    if (evt.accOnAtOffline) lines.push(`⚠ Engine was ON when device disconnected`);
+    return lines.join('\n');
+  }
+
+  if (evt.type === 'vehicle_online') {
+    const lines = [
+      COMPANY,
+      `🟡 VEHICLE BACK ONLINE`,
       `Vehicle : ${vehicleLine}`,
       `Time    : ${time}`,
     ];
-    if (evt.fuel != null)   lines.push(`Fuel    : ${evt.fuel} units`);
-    if (evt.downtimeStr)    lines.push(`Parked  : ${evt.downtimeStr}`);
+    if (evt.fuel      != null) lines.push(`Fuel        : ${evt.fuel}`);
+    if (evt.offlineStr)        lines.push(`Was offline : ${evt.offlineStr}`);
+    return lines.join('\n');
+  }
+
+  if (evt.type === 'acc_on') {
+    const lines = [
+      COMPANY,
+      `🟢 ENGINE SWITCHED ON`,
+      `Vehicle : ${vehicleLine}`,
+      `Time    : ${time}`,
+      ...(evt.fuel != null ? [`Fuel    : ${evt.fuel}`] : []),
+    ];
+    if (evt.downtimeStr) lines.push(`Was parked : ${evt.downtimeStr}`);
     if (evt.fuelConsumedDuringOff != null && evt.fuelConsumedDuringOff > 0)
-      lines.push(`Off-consumption: -${evt.fuelConsumedDuringOff}L`);
+      lines.push(`⚠ THEFT SUSPECTED: -${evt.fuelConsumedDuringOff} consumed while engine was OFF`);
     return lines.join('\n');
   }
 
   // acc_off
   const lines = [
     COMPANY,
-    `ENGINE OFF`,
+    `🔴 ENGINE SWITCHED OFF`,
     `Vehicle : ${vehicleLine}`,
     `Time    : ${time}`,
   ];
-  if (evt.fuel        != null) lines.push(`Fuel    : ${evt.fuel} units`);
-  if (evt.fuelAtStart != null) lines.push(`Fuel start: ${evt.fuelAtStart} units`);
-  if (evt.fuelUsed    != null) lines.push(`Consumed: ${evt.fuelUsed} units`);
-  if (evt.uptimeStr)           lines.push(`Ran for : ${evt.uptimeStr}`);
+  if (evt.fuelAtStart != null) lines.push(`Fuel start  : ${evt.fuelAtStart}`);
+  if (evt.fuel        != null) lines.push(`Fuel now    : ${evt.fuel}`);
+  if (evt.fuelUsed    != null) lines.push(`Consumed    : ${evt.fuelUsed}`);
+  if (evt.uptimeStr)           lines.push(`Ran for     : ${evt.uptimeStr}`);
   return lines.join('\n');
 }
 
@@ -112,7 +149,7 @@ async function sendAccEvent(evt) {
 
   const message   = evt._smsMessage || formatMessage(evt);
   const reference = `fleet-${evt.type || 'event'}-${Date.now()}`;
-  const icon      = evt.type === 'acc_on' ? '🟢' : evt.type === 'acc_off' ? '🔴' : '📊';
+  const icon      = evt.type === 'acc_on' ? '🟢' : evt.type === 'acc_off' ? '🔴' : evt.type === 'vehicle_online' ? '🟡' : evt.type === 'vehicle_offline' ? '⚫' : evt.type === 'fuel_theft_suspected' ? '🚨' : '📊';
 
   logger.info(`[SMS] ${icon} Sending "${evt.type}" to ${recipients.length} recipient(s)`);
   logger.info(`[SMS] Message preview: ${message.split('\n')[0]}…`);

@@ -18,7 +18,7 @@ require('dotenv').config();
 const logger = require('../utils/logger');
 const cms    = require('./cmsv6.service');
 const sms    = require('./sms.service');
-const { monitor, getDailyStats, getLastNonZeroFuel, getTotalFuelDuringOff } = require('./monitor.service'); // getDailyStats used for fuelStartOfDay fallback
+const { monitor, getDailyStats, getLastNonZeroFuel, getTotalFuelDuringOff, getVehicleState } = require('./monitor.service');
 
 const TIMEZONE = process.env.FLEET_TIMEZONE || 'Africa/Dar_es_Salaam';
 const COMPANY  = process.env.COMPANY_NAME   || 'Star Link Fleet';
@@ -34,54 +34,106 @@ function fmtDur(secs) {
 
 function r1(v) { return Math.round(v * 10) / 10; }
 
-// Returns ms until next phase boundary (00:05, 08:05, or 16:05 in fleet timezone)
+function fmtTime(ms) {
+  // Format a UTC ms timestamp as HH:MM in fleet timezone
+  return new Date(ms).toLocaleString('en-US', {
+    timeZone: TIMEZONE, hour: '2-digit', minute: '2-digit', hour12: false,
+  });
+}
+
+// Returns ms until next fire point (00:05, 06:05, 14:05, 22:05 in fleet timezone)
 function msUntilNextPhase() {
   const now = new Date();
   const tzStr = now.toLocaleString('en-US', { timeZone: TIMEZONE });
   const tzDate = new Date(tzStr);
   const totalMins = tzDate.getHours() * 60 + tzDate.getMinutes();
-  const phaseMins = [5, 8 * 60 + 5, 16 * 60 + 5]; // 00:05, 08:05, 16:05
-  const nextMins = phaseMins.find(p => p > totalMins) ?? (24 * 60 + 5);
+  const fireMins = [5, 6 * 60 + 5, 14 * 60 + 5, 22 * 60 + 5]; // 00:05, 06:05, 14:05, 22:05
+  const nextMins = fireMins.find(p => p > totalMins) ?? (24 * 60 + 5);
   const diffMs = (nextMins - totalMins) * 60 * 1000
                - tzDate.getSeconds() * 1000
                - tzDate.getMilliseconds();
   return Math.max(diffMs, 0);
 }
 
-// Returns the phase that JUST ENDED (fires at 08:05→night ended, 16:05→day ended, 00:05→evening ended)
+// Returns info about the window that just ended, or the daily summary at midnight
 function getPhaseInfo() {
   const tzStr = new Date().toLocaleString('en-US', { timeZone: TIMEZONE });
   const tzDate = new Date(tzStr);
   const h = tzDate.getHours();
   const today = tzDate.toLocaleDateString('en-CA'); // YYYY-MM-DD
-  const yd    = new Date(tzDate); yd.setDate(yd.getDate() - 1);
+  const yd = new Date(tzDate); yd.setDate(yd.getDate() - 1);
   const yesterday = yd.toLocaleDateString('en-CA');
-  // h>=8 && h<16 → fired at 08:05, night window (00:00–07:59) just ended
-  // h>=16        → fired at 16:05, day window  (08:00–15:59) just ended
-  // h<8          → fired at 00:05, evening window (16:00–23:59) of yesterday just ended
-  if (h >= 8 && h < 16) return { name: 'NIGHT REPORT (00:00–07:59)',   begin: `${today} 00:00:00`,     end: `${today} 07:59:59`     };
-  if (h >= 16)           return { name: 'DAY REPORT (08:00–15:59)',     begin: `${today} 08:00:00`,     end: `${today} 15:59:59`     };
-  return                        { name: 'EVENING REPORT (16:00–23:59)', begin: `${yesterday} 16:00:00`, end: `${yesterday} 23:59:59` };
+  // h < 6   → fired at 00:05 → daily summary for yesterday
+  // h >= 6  && h < 14 → fired at 06:05 → night shift report (22:00–05:59)
+  // h >= 14 && h < 22 → fired at 14:05 → day shift report   (06:00–13:59)
+  // h >= 22            → fired at 22:05 → evening shift report (14:00–21:59)
+  if (h < 6)             return { name: `DAILY SUMMARY — ${yesterday}`,            begin: `${yesterday} 00:00:00`, end: `${yesterday} 23:59:59`, isDaily: true  };
+  if (h >= 6  && h < 14) return { name: 'NIGHT SHIFT REPORT (22:00–05:59)',        begin: `${yesterday} 22:00:00`, end: `${today} 05:59:59`,    isDaily: false };
+  if (h >= 14 && h < 22) return { name: 'DAY SHIFT REPORT (06:00–13:59)',          begin: `${today} 06:00:00`,    end: `${today} 13:59:59`,    isDaily: false };
+  return                        { name: 'EVENING SHIFT REPORT (14:00–21:59)',       begin: `${today} 14:00:00`,    end: `${today} 21:59:59`,    isDaily: false };
 }
 
-// Calculate real ACC-ON uptime from GPS track points within a time window
-// Uses the 'ac' bit field (bit0=1 → ACC ON) from queryTrackDetail track points
-async function calcWindowUptime(devIdno, begintime, endtime) {
+// Analyse GPS track points for a window.
+// Returns: uptimeSecs (ACC ON), onlineSecs (connected), offlineSecs (no signal).
+// A gap > OFFLINE_GAP between consecutive points is treated as an offline period.
+const OFFLINE_GAP = 5 * 60; // 5 minutes
+
+async function calcWindowStats(devIdno, begintime, endtime) {
+  const windowBegin = new Date(begintime).getTime();
+  const windowEnd   = new Date(endtime).getTime();
+  const windowSecs  = Math.round((windowEnd - windowBegin) / 1000);
+  const empty = { uptimeSecs: 0, onlineSecs: 0, offlineSecs: windowSecs,
+                  wasOfflineAtStart: true, firstOnlineAt: null, fuelAtFirstPoint: null };
+
   try {
     const tracks = await cms.getGPSHistory(devIdno, begintime, endtime);
-    if (!Array.isArray(tracks) || tracks.length < 2) return 0;
-    const sorted = tracks.filter(p => p.gt).sort((a, b) => new Date(a.gt) - new Date(b.gt));
-    let secs = 0;
+    if (!Array.isArray(tracks) || tracks.length === 0) return empty;
+
+    const sorted = tracks
+      .filter(p => p.gpsTime)
+      .sort((a, b) => new Date(a.gpsTime) - new Date(b.gpsTime));
+    if (sorted.length === 0) return empty;
+
+    let uptimeSecs  = 0;
+    let offlineSecs = 0;
+
+    // Gap from window start to first packet
+    const firstPointMs  = new Date(sorted[0].gpsTime).getTime();
+    const gapFromStart  = (firstPointMs - windowBegin) / 1000;
+    const wasOfflineAtStart = gapFromStart > OFFLINE_GAP;
+    if (wasOfflineAtStart) offlineSecs += gapFromStart;
+
+    // Walk consecutive pairs
     for (let i = 0; i < sorted.length - 1; i++) {
-      if ((sorted[i].ac & 1) === 1) {
-        const dt = (new Date(sorted[i + 1].gt) - new Date(sorted[i].gt)) / 1000;
-        if (dt > 0 && dt < 3600) secs += dt; // skip gaps >1hr (offline/no-signal)
+      const t1 = new Date(sorted[i].gpsTime).getTime();
+      const t2 = new Date(sorted[i + 1].gpsTime).getTime();
+      const dt = (t2 - t1) / 1000;
+      if (dt > OFFLINE_GAP) {
+        offlineSecs += dt;
+      } else if (sorted[i].accOn === true) {
+        uptimeSecs += dt;
       }
     }
-    return Math.round(secs);
+
+    // Gap from last packet to window end (only for past windows)
+    if (windowEnd < Date.now()) {
+      const lastPointMs = new Date(sorted[sorted.length - 1].gpsTime).getTime();
+      const gapToEnd    = (windowEnd - lastPointMs) / 1000;
+      if (gapToEnd > OFFLINE_GAP) offlineSecs += gapToEnd;
+    }
+
+    const onlineSecs = Math.max(0, windowSecs - Math.round(offlineSecs));
+    return {
+      uptimeSecs:       Math.round(uptimeSecs),
+      onlineSecs:       Math.round(onlineSecs),
+      offlineSecs:      Math.round(offlineSecs),
+      wasOfflineAtStart,
+      firstOnlineAt:    firstPointMs,              // ms timestamp of first GPS packet
+      fuelAtFirstPoint: sorted[0].fuel ?? null,   // already scaled ÷100 by scaleStatus
+    };
   } catch (e) {
-    logger.warn(`[Report] calcWindowUptime failed for ${devIdno}: ${e.message}`);
-    return 0;
+    logger.warn(`[Report] calcWindowStats failed for ${devIdno}: ${e.message}`);
+    return empty;
   }
 }
 
@@ -92,15 +144,16 @@ async function buildReport(manual = false) {
   const dailyStats   = getDailyStats();
   const lastFuelMap  = getLastNonZeroFuel();
   const fuelDuringOffMap = getTotalFuelDuringOff();
+  const vehicleState = getVehicleState();
 
-  // Determine uptime calculation window
+  // Determine calculation window
   // Manual: from start of day to now. Scheduled: the phase window that just ended.
-  const phaseInfo = getPhaseInfo();
+  const phaseInfo  = getPhaseInfo();
   const todayLocal = new Date().toLocaleString('sv', { timeZone: TIMEZONE }).slice(0, 10);
   const nowLocal   = new Date().toLocaleString('sv', { timeZone: TIMEZONE }).slice(0, 19);
   const uptimeWindow = manual
     ? { begin: `${todayLocal} 00:00:00`, end: nowLocal }
-    : { begin: phaseInfo.begin, end: phaseInfo.end };
+    : { begin: phaseInfo.begin,          end: phaseInfo.end };
 
   const [vehicles, statuses] = await Promise.all([
     cms.getVehicles(),
@@ -113,9 +166,9 @@ async function buildReport(manual = false) {
     if (id) statusMap[id] = s;
   }
 
-  // Fetch real uptime from GPS tracks for all vehicles in parallel
-  const uptimeSecs_list = await Promise.all(
-    vehicles.map(v => calcWindowUptime(v.devIdno, uptimeWindow.begin, uptimeWindow.end))
+  // Fetch window stats (uptime + online/offline breakdown) for all vehicles in parallel
+  const windowStats_list = await Promise.all(
+    vehicles.map(v => calcWindowStats(v.devIdno, uptimeWindow.begin, uptimeWindow.end))
   );
 
   const vehicleReports = [];
@@ -128,6 +181,7 @@ async function buildReport(manual = false) {
     const id    = v.devIdno;
     const s     = statusMap[id] || {};
     const stats = dailyStats[id];
+    const vs    = vehicleState[id]; // live monitor state
 
     const plate   = s.vid || v.plate || v.nm || id;
     const name    = v.nm  || plate;
@@ -142,12 +196,37 @@ async function buildReport(manual = false) {
                   : (lastFuelMap[id] != null ? lastFuelMap[id] : rawFuel);
     const fuelEstimated = (rawFuel === 0 || rawFuel == null) && lastFuelMap[id] != null;
 
-    // Real uptime from GPS track points for the relevant window
-    const uptimeSecs = uptimeSecs_list[i];
+    // Window stats from GPS track history
+    const { uptimeSecs, onlineSecs, offlineSecs: windowOfflineSecs,
+            wasOfflineAtStart, firstOnlineAt, fuelAtFirstPoint } = windowStats_list[i];
 
-    const fuelStart = stats?.fuelStartOfDay ?? null;
-    const fuelUsed  = (fuelStart != null && fuel != null && fuelStart > fuel)
+    // Fuel start reference:
+    //   • Vehicle online at window start  → use daily fuelStartOfDay
+    //   • Offline at window start but came online during window → use fuel at first GPS point
+    //   • Offline the entire window → no fuel start available
+    let fuelStart, fuelStartTime;
+    if (!wasOfflineAtStart) {
+      fuelStart     = stats?.fuelStartOfDay ?? null;
+      fuelStartTime = null; // normal — no annotation needed
+    } else if (firstOnlineAt && fuelAtFirstPoint != null) {
+      fuelStart     = r1(fuelAtFirstPoint);
+      fuelStartTime = fmtTime(firstOnlineAt); // "online from HH:MM"
+    } else {
+      fuelStart     = null;
+      fuelStartTime = null;
+    }
+
+    const fuelUsed = (fuelStart != null && fuel != null && fuelStart > fuel)
       ? r1(fuelStart - fuel) : null;
+
+    // Current ACC state duration — how long has it been in this state right now
+    const accCurrentSecs = vs?.changedAt ? Math.round((now - vs.changedAt) / 1000) : null;
+
+    // If currently offline: when did it go offline and for how long
+    const isOfflineNow    = online === 0;
+    const offlineSinceMs  = isOfflineNow && vs?.offlineSince ? vs.offlineSince : null;
+    const offlineForSecs  = offlineSinceMs ? Math.round((now - offlineSinceMs) / 1000) : null;
+    const offlineSinceStr = offlineSinceMs ? fmtTime(offlineSinceMs) : null;
 
     totalUptimeSecs += uptimeSecs;
     if (fuelUsed != null) totalFuelUsed += fuelUsed;
@@ -156,9 +235,13 @@ async function buildReport(manual = false) {
     else              countOff++;
 
     vehicleReports.push({
-      plate, name, accOn, online, fuel, fuelEstimated, fuelStart, fuelUsed,
-      uptimeSecs, speed, todayKm, devIdno: id,
-      fuelDuringOff: fuelDuringOffMap[id] || 0,
+      plate, name, accOn, online, fuel, fuelEstimated, fuelStart, fuelStartTime, fuelUsed,
+      uptimeSecs, onlineSecs, offlineSecs: windowOfflineSecs,
+      wasOfflineAtStart,
+      speed, todayKm, devIdno: id,
+      fuelDuringOff:   fuelDuringOffMap[id] || 0,
+      accCurrentSecs,
+      offlineSinceStr, offlineForSecs,
     });
   }
 
@@ -177,6 +260,7 @@ async function buildReport(manual = false) {
     time:      new Date(now).toISOString(),
     timeStr,
     phaseName: reportLabel,
+    isDaily:   manual ? false : (phaseInfo.isDaily ?? false),
     uptimeWindow,
     vehicleReports,
     totals: {
@@ -194,24 +278,54 @@ async function buildReport(manual = false) {
 // ── Format one SMS per vehicle (kept short — fits in a single 160-char SMS) ───
 
 function formatVehicleSMS(v, timeStr, phaseName) {
-  const status = v.online === 0 ? 'OFFLINE' : v.accOn ? 'ON' : 'OFF';
-  const lines  = [
+  const isOffline      = v.online === 0;
+  const entireOffline  = isOffline && v.onlineSecs === 0; // offline the whole window
+  const status         = isOffline ? 'OFFLINE' : v.accOn ? 'ON' : 'OFF';
+
+  // Duration in current state
+  let stateDur = '';
+  if (isOffline && v.offlineForSecs)  stateDur = ` (${fmtDur(v.offlineForSecs)})`;
+  else if (v.accCurrentSecs != null)  stateDur = ` (${fmtDur(v.accCurrentSecs)})`;
+
+  const lines = [
     COMPANY,
     phaseName || 'FLEET REPORT',
     `${v.name}${v.name !== v.plate ? ` (${v.plate})` : ''}`,
-    `ACC:${status} | Uptime:${fmtDur(v.uptimeSecs)}`,
+    `ACC:${status}${stateDur} | Uptime:${fmtDur(v.uptimeSecs)}`,
   ];
 
-  // Fuel line — only if we have data
-  const fuelParts = [];
-  if (v.fuelStart != null) fuelParts.push(`Start:${v.fuelStart}`);
-  if (v.fuel      != null) fuelParts.push(`Now:${v.fuel}${v.fuelEstimated ? '*' : ''}`);
-  if (v.fuelUsed  != null) fuelParts.push(`Used:${v.fuelUsed}`);
-  if (fuelParts.length)    lines.push(`Fuel ${fuelParts.join(' ')}`);
+  // Offline context
+  if (isOffline && v.offlineSinceStr) {
+    lines.push(`Offline since:${v.offlineSinceStr}`);
+  }
 
-  if (v.fuelDuringOff > 0) lines.push(`Off-consumption:-${v.fuelDuringOff}L`);
-  if (v.todayKm   != null && v.todayKm > 0) lines.push(`Distance today:${v.todayKm.toFixed(1)}km`);
-  if (v.speed > 0)         lines.push(`Speed:${v.speed}km/h`);
+  // Window connectivity breakdown (only if there was any offline time)
+  if (v.offlineSecs > 0) {
+    lines.push(`Window: Online ${fmtDur(v.onlineSecs)} / Offline ${fmtDur(v.offlineSecs)}`);
+  }
+
+  // Fuel
+  if (entireOffline) {
+    // No data at all this window — show last known fuel only
+    const fuelVal = v.fuel != null ? `${v.fuel}*` : 'unknown';
+    lines.push(`Fuel last known:${fuelVal}`);
+  } else {
+    // Build fuel line with smart start reference
+    const fuelParts = [];
+    if (v.wasOfflineAtStart && v.fuelStartTime) {
+      fuelParts.push(`From ${v.fuelStartTime}:${v.fuelStart ?? 'N/A'}`);
+    } else {
+      fuelParts.push(`Start:${v.fuelStart ?? 'N/A'}`);
+    }
+    fuelParts.push(`Now:${v.fuel != null ? `${v.fuel}${v.fuelEstimated ? '*' : ''}` : 'N/A'}`);
+    fuelParts.push(v.fuelUsed != null ? `Used:${v.fuelUsed}` : `Used:N/A`);
+    lines.push(`Fuel ${fuelParts.join(' ')}`);
+
+    // Fuel consumed while engine OFF — explicit theft alert with negative
+    if (v.fuelDuringOff > 0) lines.push(`⚠ THEFT SUSPECTED: -${v.fuelDuringOff} consumed while engine OFF`);
+  }
+
+  if (!isOffline && v.speed > 0) lines.push(`Speed:${v.speed}km/h`);
 
   lines.push(timeStr);
   return lines.join('\n');
@@ -251,7 +365,7 @@ let scheduleTimer = null;
 function scheduleNext() {
   const delay = msUntilNextPhase();
   const mins  = Math.round(delay / 60000);
-  logger.info(`[Report] Next phase report in ${mins}m (${getPhaseInfo().name})`);
+  logger.info(`[Report] Next report in ${mins}m`);
   scheduleTimer = setTimeout(() => {
     sendReport();
     scheduleNext();

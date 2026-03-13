@@ -1075,4 +1075,39 @@ router.get('/reports/passengers/detail', async (req, res) => {
   ok(res, data);
 });
 
+/**
+ * GET /api/debug/alarm-types?devIdno=&date=YYYY-MM-DD
+ * Probe alarm types 1-100 to find ACC events — use a date you know had engine activity.
+ * Returns all unique atp (alarm type) values found, with counts and sample labels.
+ */
+router.get('/debug/alarm-types', async (req, res) => {
+  const { begintime, endtime } = dateRange(req);
+  const { devIdno = '' } = req.query;
+  // Query a wide armType range — comma-separated 1..100
+  const wideRange = Array.from({ length: 100 }, (_, i) => i + 1).join(',');
+  const data = await cms.getAlarms({ devIdno, begintime, endtime, alarmType: wideRange, pageSize: 200 });
+  const alarms = data.alarms || [];
+
+  // Count by atp and collect a sample label so we can identify ACC events
+  const byType = {};
+  for (const a of alarms) {
+    const t = a.atp ?? a.alarmType ?? a.type ?? '?';
+    if (!byType[t]) byType[t] = { count: 0, sample: a.alarmStr || a.alarmName || a.content || '' };
+    byType[t].count++;
+  }
+
+  ok(res, { totalFound: alarms.length, byType });
+});
+
+/**
+ * GET /api/debug/raw-status
+ * Dumps the complete raw status object from CMSV6 for every vehicle — before
+ * any field transformation. Use this to find which fields differ between a
+ * vehicle that is ACC ON vs one that is ACC OFF.
+ */
+router.get('/debug/raw-status', async (req, res) => {
+  const data = await cms.getRawStatus();
+  ok(res, data);
+});
+
 module.exports = router;

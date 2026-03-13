@@ -55,7 +55,8 @@ function encryptBody(obj) {
 //   lc:   total mileage (metres → divide by 1000 for km)
 //   lt:   today's mileage (metres → divide by 1000 for km)
 //   ol:   0=offline, 1=online, 2=alarm
-//   ac:   ACC state — bit0=1 means ACC ON (e.g. 10→0b1010 → bit0=0 → ACC OFF)
+//   ac:   Audio Type (codec) — NOT ignition. Always 10 for these devices.
+//   s1:   JT/T 808 status word. Bit1=ACC (1=ON), bit0=device-active flag (always 1)
 const DIRECTIONS = ['N','NE','E','SE','S','SW','W','NW'];
 function scaleStatus(raw) {
   if (!raw) return null;
@@ -74,8 +75,10 @@ function scaleStatus(raw) {
     speed:      raw.sp  != null ? raw.sp  / 10  : null,
     fuel:       raw.yl  != null ? raw.yl  / 100 : null,
     gpsTime:    raw.gt  || null,
-    // ac: bit 0 = 1 → ACC ON. e.g. ac=10 (0b1010) → bit0=0 → ACC OFF
-    accOn:      raw.ac  != null ? (raw.ac & 1) === 1 : null,
+    // s1 = JT/T 808 hardware status bit field. Bit 1 = ACC (1=ON, 0=OFF).
+    // Bit 0 is always 1 (device active flag). Bit 1 is the ignition/ACC state.
+    // NOTE: 'ac' in this API means Audio Type (codec), NOT ignition — do not use it.
+    accOn:      raw.s1 != null ? (raw.s1 & 2) === 2 : null,
     signal:     raw.sn  != null ? raw.sn : null,
     satellites: raw.ns  != null ? raw.ns : null,
     directionCode: raw.hx != null ? raw.hx : null,
@@ -247,6 +250,13 @@ async function getAllGPS() {
   const data     = await req('/StandardApiAction_getDeviceStatus.action');
   const statuses = (data.status || []).map(scaleStatus);
   return cacheSet(key, statuses, TTL.gps);
+}
+
+async function getRawStatus() {
+  // Returns the completely unmodified status array straight from CMSV6 — no scaling,
+  // no field renaming. Use to compare ACC ON vs ACC OFF vehicles field-by-field.
+  const data = await req('/StandardApiAction_getDeviceStatus.action');
+  return (data.status || []).map(s => ({ ...s }));
 }
 
 async function getGPSHistory(devIdno, begintime, endtime) {
@@ -1110,7 +1120,7 @@ async function bindRoute({ routeId, devIdno, alertDeviation = 1 } = {}) {
 // ═══════════════════════════════════════════════════════════════════════════
 module.exports = {
   getSession, getVehicles, getVehicle,
-  getVehicleGPS, getAllGPS, getGPSHistory,
+  getVehicleGPS, getAllGPS, getRawStatus, getGPSHistory,
   getFuelLevel, getFuelReport,
   getCameraStreamUrl, getRecordedVideos, takeSnapshot,
   requestRealtimeVideo, getVideoFileInfo, getVideoHistoryFile,
