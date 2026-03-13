@@ -454,13 +454,6 @@ router.get('/alarms/types', (req, res) => {
 //  REPORTS
 // ══════════════════════════════════════════════════════════════════════════
 
-/** POST /api/fleet/report/trigger — Manually trigger the hourly report (sends SMS) */
-router.post('/fleet/report/trigger', async (req, res) => {
-  const { sendSms = false } = req.body;
-  hourlyReport.sendReport(sendSms, true); // sendSms from body, manual=true
-  ok(res, { message: 'Manual report dispatch triggered' });
-});
-
 /** GET /api/fleet/report/trigger — Documentation alias/test */
 router.get('/fleet/report/trigger', async (req, res) => {
   ok(res, { message: 'To trigger a report, use POST to this endpoint' });
