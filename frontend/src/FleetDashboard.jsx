@@ -1413,6 +1413,57 @@ function Toast({ event, onDismiss }) {
     );
   }
 
+  // ── Fuel theft toast ─────────────────────────────────────────────────────
+  if (event.type === "fuel_theft_suspected") {
+    return (
+      <div style={{ ...wrapStyle, border: `1px solid ${t.red}66`, borderLeft: `3px solid ${t.red}`, boxShadow: `0 8px 30px rgba(0,0,0,0.6), 0 0 20px ${t.red}30` }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 14 }}>🚨</span>
+            <span style={{ fontFamily: "inherit", fontWeight: 800, color: t.red, fontSize: 13 }}>{event.plate}</span>
+            <span style={{ fontFamily: "inherit", fontWeight: 700, color: t.red, fontSize: 11 }}>FUEL THEFT SUSPECTED</span>
+          </div>
+          <button onClick={() => onDismiss(event.id)} style={{ background: "none", border: "none", color: t.muted, cursor: "pointer", fontSize: 18, lineHeight: 1, padding: 0 }}>×</button>
+        </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 12, fontSize: 12, fontFamily: "inherit" }}>
+          <span style={{ color: t.textSoft }}>Before: <b style={{ color: t.text }}>{event.fuelBefore}</b></span>
+          <span style={{ color: t.textSoft }}>Now: <b style={{ color: t.text }}>{event.fuelNow}</b></span>
+          <span style={{ color: t.red }}>▼ Missing: <b>-{event.fuelDrop}</b></span>
+          {event.offlineStr && <span style={{ color: t.textSoft }}>Offline: <b style={{ color: t.text }}>{event.offlineStr}</b></span>}
+          {event.accOnAtOffline && <span style={{ color: t.accent }}>⚠ ACC was ON</span>}
+        </div>
+        <div style={{ fontSize: 10, color: t.muted, fontFamily: "inherit", marginTop: 6 }}>
+          {new Date(event.time).toLocaleString([], { year: "numeric", month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+        </div>
+      </div>
+    );
+  }
+
+  // ── Vehicle online/offline toast ──────────────────────────────────────────
+  if (event.type === "vehicle_online" || event.type === "vehicle_offline") {
+    const isOnline = event.type === "vehicle_online";
+    const color    = isOnline ? t.accent : t.muted;
+    return (
+      <div style={{ ...wrapStyle, border: `1px solid ${color}44`, borderLeft: `3px solid ${color}` }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 14 }}>{isOnline ? "🟡" : "⚫"}</span>
+            <span style={{ fontFamily: "inherit", fontWeight: 800, color, fontSize: 13 }}>{event.plate}</span>
+            <span style={{ fontFamily: "inherit", fontWeight: 700, color, fontSize: 11 }}>{isOnline ? "BACK ONLINE" : "WENT OFFLINE"}</span>
+          </div>
+          <button onClick={() => onDismiss(event.id)} style={{ background: "none", border: "none", color: t.muted, cursor: "pointer", fontSize: 18, lineHeight: 1, padding: 0 }}>×</button>
+        </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 12, fontSize: 12, fontFamily: "inherit" }}>
+          {event.fuel      != null && <span style={{ color: t.textSoft }}>⛽ <b style={{ color: t.text }}>{event.fuel}</b></span>}
+          {isOnline && event.offlineStr && <span style={{ color: t.textSoft }}>Was offline: <b style={{ color: t.text }}>{event.offlineStr}</b></span>}
+        </div>
+        <div style={{ fontSize: 10, color: t.muted, fontFamily: "inherit", marginTop: 6 }}>
+          {new Date(event.time).toLocaleString([], { year: "numeric", month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+        </div>
+      </div>
+    );
+  }
+
   // ── ACC on/off toast ─────────────────────────────────────────────────────
   const isOn  = event.type === "acc_on";
   const color = isOn ? t.green : t.accent;
@@ -1475,9 +1526,98 @@ function fmtTime(iso) {
 
 function EngineEventCard({ e }) {
   const { t } = useTheme();
+  const ts = fmtTime(e.time);
+
+  // ── Fuel theft card ───────────────────────────────────────────────────────
+  if (e.type === "fuel_theft_suspected") {
+    return (
+      <div style={{ background: t.panelBright, border: `1px solid ${t.red}40`, borderLeft: `4px solid ${t.red}`, borderRadius: 12, padding: "16px 18px", marginBottom: 10, boxShadow: `0 2px 12px rgba(0,0,0,0.3), 0 0 20px ${t.red}10` }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{ width: 38, height: 38, borderRadius: 10, background: `${t.red}18`, border: `1.5px solid ${t.red}50`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 }}>🚨</div>
+            <div>
+              <div style={{ fontWeight: 800, color: t.red, fontSize: 14 }}>{e.vehicleName && e.vehicleName !== e.plate ? e.vehicleName : e.plate}</div>
+              {e.vehicleName && e.vehicleName !== e.plate && <div style={{ color: t.muted, fontSize: 11 }}>{e.plate}</div>}
+            </div>
+          </div>
+          <div style={{ textAlign: "right" }}>
+            <div style={{ display: "inline-block", background: `${t.red}18`, border: `1px solid ${t.red}50`, borderRadius: 6, padding: "3px 10px", color: t.red, fontWeight: 800, fontSize: 12, marginBottom: 4 }}>FUEL THEFT SUSPECTED</div>
+            <div style={{ color: t.text, fontSize: 12, fontWeight: 600 }}>{ts.time}</div>
+            <div style={{ color: t.muted, fontSize: 10 }}>{ts.date}</div>
+          </div>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(130px, 1fr))", gap: 8, marginBottom: 10 }}>
+          <div style={{ background: t.bg, borderRadius: 8, padding: "8px 10px", border: `1px solid ${t.border}` }}>
+            <div style={{ color: t.muted, fontSize: 10, marginBottom: 2 }}>FUEL WHEN OFFLINE</div>
+            <div style={{ color: t.textSoft, fontWeight: 700, fontSize: 13 }}>⛽ {e.fuelBefore}</div>
+          </div>
+          <div style={{ background: t.bg, borderRadius: 8, padding: "8px 10px", border: `1px solid ${t.border}` }}>
+            <div style={{ color: t.muted, fontSize: 10, marginBottom: 2 }}>FUEL NOW (ONLINE)</div>
+            <div style={{ color: t.textSoft, fontWeight: 700, fontSize: 13 }}>⛽ {e.fuelNow}</div>
+          </div>
+          <div style={{ background: t.bg, borderRadius: 8, padding: "8px 10px", border: `1px solid ${t.red}30` }}>
+            <div style={{ color: t.muted, fontSize: 10, marginBottom: 2 }}>MISSING FUEL</div>
+            <div style={{ color: t.red, fontWeight: 700, fontSize: 13 }}>▼ -{e.fuelDrop} (lost while offline)</div>
+          </div>
+          {e.offlineStr && (
+            <div style={{ background: t.bg, borderRadius: 8, padding: "8px 10px", border: `1px solid ${t.border}` }}>
+              <div style={{ color: t.muted, fontSize: 10, marginBottom: 2 }}>WAS OFFLINE FOR</div>
+              <div style={{ color: t.accent, fontWeight: 700, fontSize: 13 }}>⏱ {e.offlineStr}</div>
+            </div>
+          )}
+          {e.accOnAtOffline && (
+            <div style={{ background: t.bg, borderRadius: 8, padding: "8px 10px", border: `1px solid ${t.accent}30` }}>
+              <div style={{ color: t.muted, fontSize: 10, marginBottom: 2 }}>NOTE</div>
+              <div style={{ color: t.accent, fontWeight: 700, fontSize: 12 }}>⚠ Engine was ON when disconnected</div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // ── Vehicle online / offline card ─────────────────────────────────────────
+  if (e.type === "vehicle_online" || e.type === "vehicle_offline") {
+    const isOnline = e.type === "vehicle_online";
+    const color    = isOnline ? t.accent : t.muted;
+    return (
+      <div style={{ background: t.panelBright, border: `1px solid ${color}30`, borderLeft: `4px solid ${color}`, borderRadius: 12, padding: "16px 18px", marginBottom: 10, boxShadow: "0 2px 12px rgba(0,0,0,0.3)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{ width: 38, height: 38, borderRadius: 10, background: `${color}18`, border: `1.5px solid ${color}50`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 }}>{isOnline ? "🟡" : "⚫"}</div>
+            <div>
+              <div style={{ fontWeight: 800, color: t.text, fontSize: 14 }}>{e.vehicleName && e.vehicleName !== e.plate ? e.vehicleName : e.plate}</div>
+              {e.vehicleName && e.vehicleName !== e.plate && <div style={{ color: t.muted, fontSize: 11 }}>{e.plate}</div>}
+            </div>
+          </div>
+          <div style={{ textAlign: "right" }}>
+            <div style={{ display: "inline-block", background: `${color}18`, border: `1px solid ${color}50`, borderRadius: 6, padding: "3px 10px", color, fontWeight: 800, fontSize: 12, marginBottom: 4 }}>{isOnline ? "BACK ONLINE" : "WENT OFFLINE"}</div>
+            <div style={{ color: t.text, fontSize: 12, fontWeight: 600 }}>{ts.time}</div>
+            <div style={{ color: t.muted, fontSize: 10 }}>{ts.date}</div>
+          </div>
+        </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+          {e.fuel != null && (
+            <div style={{ background: t.bg, borderRadius: 8, padding: "8px 10px", border: `1px solid ${t.border}` }}>
+              <div style={{ color: t.muted, fontSize: 10, marginBottom: 2 }}>FUEL</div>
+              <div style={{ color: t.textSoft, fontWeight: 700, fontSize: 13 }}>⛽ {e.fuel}</div>
+            </div>
+          )}
+          {isOnline && e.offlineStr && (
+            <div style={{ background: t.bg, borderRadius: 8, padding: "8px 10px", border: `1px solid ${t.border}` }}>
+              <div style={{ color: t.muted, fontSize: 10, marginBottom: 2 }}>WAS OFFLINE FOR</div>
+              <div style={{ color: t.accent, fontWeight: 700, fontSize: 13 }}>⏱ {e.offlineStr}</div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // ── ACC on/off card ───────────────────────────────────────────────────────
   const isOn  = e.type === "acc_on";
   const color = isOn ? t.green : t.accent;
-  const ts    = fmtTime(e.time);
+  const ts2   = ts;
 
   return (
     <div style={{
@@ -1720,22 +1860,25 @@ function NotificationsView({ events, onClear }) {
   const [fetchMsg,      setFetchMsg]      = useState(null);
 
   const engineEvents  = events.filter(e => e.type === "acc_on" || e.type === "acc_off");
+  const alertEvents   = events.filter(e => e.type === "vehicle_online" || e.type === "vehicle_offline" || e.type === "fuel_theft_suspected");
   const hourlyReports = events.filter(e => e.type === "hourly_report" && !e._manual);
   const manualReports = events.filter(e => e.type === "hourly_report" && e._manual);
 
   const tabList = [
     { id: "all",     label: "All",            count: events.length        },
     { id: "engine",  label: "Engine Events",  count: engineEvents.length  },
-    { id: "hourly",  label: "Hourly Reports", count: hourlyReports.length },
+    { id: "alerts",  label: "Alerts",         count: alertEvents.length   },
+    { id: "hourly",  label: "Shift Reports",  count: hourlyReports.length },
     { id: "manual",  label: "Manual Reports", count: manualReports.length },
   ];
 
   const baseEvents = tab === "engine" ? engineEvents
+                   : tab === "alerts" ? alertEvents
                    : tab === "hourly" ? hourlyReports
                    : tab === "manual" ? manualReports
                    : events;
 
-  const plates  = ["all", ...Array.from(new Set(engineEvents.map(e => e.plate).filter(Boolean))).sort()];
+  const plates  = ["all", ...Array.from(new Set(events.map(e => e.plate).filter(Boolean))).sort()];
   const visible = selectedPlate === "all" ? baseEvents
                 : baseEvents.filter(e => e.plate === selectedPlate || e.type === "hourly_report");
 
