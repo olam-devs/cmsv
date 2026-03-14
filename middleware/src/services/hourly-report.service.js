@@ -242,6 +242,8 @@ async function buildReport(manual = false) {
       fuelDuringOff:   fuelDuringOffMap[id] || 0,
       accCurrentSecs,
       offlineSinceStr, offlineForSecs,
+      lat: s.lat ?? null,
+      lng: s.lng ?? null,
     });
   }
 
@@ -326,6 +328,10 @@ function formatVehicleSMS(v, timeStr, phaseName) {
   }
 
   if (!isOffline && v.speed > 0) lines.push(`Speed:${v.speed}km/h`);
+
+  if (v.lat != null && v.lng != null) {
+    lines.push(`Location:https://maps.google.com/?q=${v.lat},${v.lng}`);
+  }
 
   lines.push(timeStr);
   return lines.join('\n');
