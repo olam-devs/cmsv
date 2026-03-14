@@ -15,6 +15,7 @@ const router  = express.Router();
 const cms     = require('../services/cmsv6.service');
 const hourlyReport = require('../services/hourly-report.service');
 const { getLastNonZeroFuel } = require('../services/monitor.service');
+const calibration = require('../services/calibration.service');
 const logger  = require('../utils/logger');
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -176,7 +177,14 @@ router.get('/fuel/fleet', async (req, res) => {
 router.get('/fuel/:id/live', async (req, res) => {
   const data = await cms.getFuelLevel(req.params.id);
   if (!data) return err(res, 'No fuel data — check sensor is configured', 404);
-  ok(res, data);
+  // Resolve devIdno for calibration lookup (id may be plate or devIdno)
+  const vehicles = await cms.getVehicles().catch(() => []);
+  const veh = vehicles.find(v =>
+    v.plate === req.params.id || v.nm === req.params.id || v.devIdno === req.params.id
+  );
+  const devIdno = veh?.devIdno || req.params.id;
+  const calibrated = calibration.applyCalibration(devIdno, data.fuel);
+  ok(res, { ...data, fuelRaw: data.fuel, fuel: calibrated ?? data.fuel, calibrated: calibrated != null });
 });
 
 /**
@@ -194,8 +202,49 @@ router.get('/fuel/:id/report', async (req, res) => {
   const devIdno = veh?.devIdno || req.params.id;
   // queryTrackDetail returns GPS track points with yl (fuel), sp (speed), lc (mileage)
   const tracks = await cms.getGPSHistory(devIdno, begintime, endtime);
+  // Apply per-vehicle fuel calibration if available
+  const cal = calibration.getCalibration(devIdno);
+  const calibrated = !!cal;
+  const infos = tracks.map(pt => {
+    if (!calibrated || pt.fuel == null) return pt;
+    return { ...pt, fuelRaw: pt.fuel, fuel: calibration.applyCalibration(devIdno, pt.fuel) ?? pt.fuel };
+  });
   // Wrap in { infos: [...] } so normalizeFuelData in frontend recognises it
-  ok(res, { infos: tracks }, { period: { begintime, endtime }, points: tracks.length });
+  ok(res, { infos, calibrated }, { period: { begintime, endtime }, points: infos.length });
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+//  FUEL CALIBRATION
+// ══════════════════════════════════════════════════════════════════════════
+
+/** GET /api/fuel/calibrations — All vehicle calibrations */
+router.get('/fuel/calibrations', (req, res) => {
+  ok(res, calibration.getAllCalibrations());
+});
+
+/** GET /api/fuel/:devIdno/calibration — Calibration for one vehicle */
+router.get('/fuel/:devIdno/calibration', (req, res) => {
+  const cal = calibration.getCalibration(req.params.devIdno);
+  if (!cal) return err(res, 'No calibration stored for this vehicle', 404);
+  ok(res, cal);
+});
+
+/**
+ * POST /api/fuel/:devIdno/calibration
+ * Body: { points: [{ sensorValue: number, actualLiters: number }, ...] }
+ * Runs linear regression and stores the result.
+ */
+router.post('/fuel/:devIdno/calibration', (req, res) => {
+  const { points } = req.body;
+  if (!Array.isArray(points)) return err(res, 'points array is required');
+  const result = calibration.setCalibration(req.params.devIdno, points);
+  ok(res, result);
+});
+
+/** DELETE /api/fuel/:devIdno/calibration — Remove calibration */
+router.delete('/fuel/:devIdno/calibration', (req, res) => {
+  calibration.deleteCalibration(req.params.devIdno);
+  ok(res, { deleted: true });
 });
 
 // ══════════════════════════════════════════════════════════════════════════
