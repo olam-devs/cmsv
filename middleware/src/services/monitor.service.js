@@ -136,6 +136,8 @@ async function poll() {
     const accOn  = s.accOn;          // boolean from scaleStatus() — null if field missing
     const online = (s.ol ?? 0) !== 0; // ol: 0=offline, 1=online, 2=alarm
     const fuel   = s.fuel;           // scaled (yl / 100), may be null
+    const lat    = s.lat  ?? null;
+    const lng    = s.lng  ?? null;
 
     // ── Daily stats: seed fuel at start of day ────────────────────────────
     const stats = ensureDailyStats(id, now);
@@ -158,9 +160,11 @@ async function poll() {
       continue;
     }
 
-    // Keep plate / name up to date
+    // Keep plate / name and last known GPS up to date
     prev.plate       = plate;
     prev.vehicleName = vehicleName;
+    if (lat != null) prev.lastLat = lat;
+    if (lng != null) prev.lastLng = lng;
 
     // ── Online / offline transition (2-poll confirmation) ─────────────────
     if (online && !prev.online) {
@@ -183,6 +187,7 @@ async function poll() {
             offlineSecs,
             offlineStr:     offlineSecs ? formatDuration(offlineSecs) : null,
             accOnAtOffline: prev.accOnAtOffline ?? false,
+            lat, lng,
           };
           pushHistory(theftEvt);
           monitor.emit('event', theftEvt);
@@ -200,6 +205,7 @@ async function poll() {
         time:         new Date(now).toISOString(),
         offlineSecs,
         offlineStr:   offlineSecs ? formatDuration(offlineSecs) : null,
+        lat, lng,
       };
       prev.online         = true;
       prev.pendingOffline = false;
@@ -235,6 +241,8 @@ async function poll() {
           devIdno:     id,
           fuel:        prev.fuelAtChange != null ? round1(prev.fuelAtChange) : null,
           time:        new Date(now).toISOString(),
+          lat:         prev.lastLat ?? null,
+          lng:         prev.lastLng ?? null,
         };
         pushHistory(offlineEvt);
         monitor.emit('event', offlineEvt);
@@ -267,6 +275,7 @@ async function poll() {
         downtimeSecs: durationSecs,
         downtimeStr:  formatDuration(durationSecs),
         fuelConsumedDuringOff,
+        lat, lng,
       };
       if (fuelConsumedDuringOff != null) stats.totalFuelConsumedDuringOff += fuelConsumedDuringOff;
     } else {
@@ -285,6 +294,7 @@ async function poll() {
         time:        new Date(now).toISOString(),
         uptimeSecs:  durationSecs,
         uptimeStr:   formatDuration(durationSecs),
+        lat, lng,
       };
     }
 

@@ -30,6 +30,13 @@ function getRecipients() {
   // Strip leading '+' → messaging-service.co.tz expects 255XXXXXXXXX format
 }
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function mapsLink(lat, lng) {
+  if (lat == null || lng == null) return null;
+  return `https://maps.google.com/?q=${lat},${lng}`;
+}
+
 // ── Message formatter (ACC on/off events) ─────────────────────────────────────
 
 function formatMessage(evt) {
@@ -43,14 +50,18 @@ function formatMessage(evt) {
     ? `${evt.vehicleName} (${evt.plate})`
     : (evt.plate || 'Unknown');
 
+  const location = mapsLink(evt.lat, evt.lng);
+
   if (evt.type === 'vehicle_offline') {
-    return [
+    const lines = [
       COMPANY,
       `⚫ VEHICLE WENT OFFLINE`,
       `Vehicle : ${vehicleLine}`,
       `Time    : ${time}`,
-      ...(evt.fuel != null ? [`Fuel    : ${evt.fuel}`] : []),
-    ].join('\n');
+    ];
+    if (evt.fuel != null) lines.push(`Fuel    : ${evt.fuel}`);
+    if (location)         lines.push(`Location: ${location}`);
+    return lines.join('\n');
   }
 
   if (evt.type === 'fuel_theft_suspected') {
@@ -65,6 +76,7 @@ function formatMessage(evt) {
     ];
     if (evt.offlineStr)     lines.push(`Was offline for : ${evt.offlineStr}`);
     if (evt.accOnAtOffline) lines.push(`⚠ Engine was ON when device disconnected`);
+    if (location)           lines.push(`Location: ${location}`);
     return lines.join('\n');
   }
 
@@ -77,6 +89,7 @@ function formatMessage(evt) {
     ];
     if (evt.fuel      != null) lines.push(`Fuel        : ${evt.fuel}`);
     if (evt.offlineStr)        lines.push(`Was offline : ${evt.offlineStr}`);
+    if (location)              lines.push(`Location    : ${location}`);
     return lines.join('\n');
   }
 
@@ -86,11 +99,12 @@ function formatMessage(evt) {
       `🟢 ENGINE SWITCHED ON`,
       `Vehicle : ${vehicleLine}`,
       `Time    : ${time}`,
-      ...(evt.fuel != null ? [`Fuel    : ${evt.fuel}`] : []),
     ];
-    if (evt.downtimeStr) lines.push(`Was parked : ${evt.downtimeStr}`);
+    if (evt.fuel != null) lines.push(`Fuel    : ${evt.fuel}`);
+    if (evt.downtimeStr)  lines.push(`Was parked : ${evt.downtimeStr}`);
     if (evt.fuelConsumedDuringOff != null && evt.fuelConsumedDuringOff > 0)
       lines.push(`⚠ THEFT SUSPECTED: -${evt.fuelConsumedDuringOff} consumed while engine was OFF`);
+    if (location) lines.push(`Location: ${location}`);
     return lines.join('\n');
   }
 
@@ -105,6 +119,7 @@ function formatMessage(evt) {
   if (evt.fuel        != null) lines.push(`Fuel now    : ${evt.fuel}`);
   if (evt.fuelUsed    != null) lines.push(`Consumed    : ${evt.fuelUsed}`);
   if (evt.uptimeStr)           lines.push(`Ran for     : ${evt.uptimeStr}`);
+  if (location)                lines.push(`Location    : ${location}`);
   return lines.join('\n');
 }
 
