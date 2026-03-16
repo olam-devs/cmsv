@@ -550,333 +550,8 @@ function totalConsumption(data) {
   return Math.round(used * 10) / 10;
 }
 
-// ── View: Fuel Sensor Calibration ─────────────────────────────────────────────
+// ── (calibration removed — handled natively in CMSV6) ─────────────────────────
 
-function ScatterChart({ points = [], slope, intercept, height = 260 }) {
-  const { t } = useTheme();
-  const containerRef = useRef(null);
-  const [W, setW] = useState(500);
-  useEffect(() => {
-    if (!containerRef.current) return;
-    const ob = new ResizeObserver(e => setW(e[0].contentRect.width));
-    ob.observe(containerRef.current);
-    return () => ob.disconnect();
-  }, []);
-
-  const pad = { top: 16, right: 20, bottom: 44, left: 58 };
-  const cW = Math.max(W - pad.left - pad.right, 10);
-  const cH = Math.max(height - pad.top - pad.bottom, 10);
-
-  if (points.length === 0) return (
-    <div ref={containerRef} style={{ width: "100%" }}>
-      <div style={{ height, display: "flex", alignItems: "center", justifyContent: "center", color: t.muted, fontSize: 13 }}>
-        Add calibration points to see the chart
-      </div>
-    </div>
-  );
-
-  const xs = points.map(p => p.sensorValue);
-  const ys = points.map(p => p.actualLiters);
-  const xMin = Math.min(...xs) * 0.95, xMax = Math.max(...xs) * 1.05 || 1;
-  const yMin = Math.max(0, Math.min(...ys) * 0.9),
-        yMax = Math.max(...ys) * 1.1 || 1;
-
-  const sx = x => ((x - xMin) / (xMax - xMin)) * cW;
-  const sy = y => cH - ((y - yMin) / (yMax - yMin)) * cH;
-
-  const yTicks = Array.from({ length: 6 }, (_, i) => yMin + (yMax - yMin) * i / 5);
-  const xTicks = Array.from({ length: 6 }, (_, i) => xMin + (xMax - xMin) * i / 5);
-
-  // Regression line endpoints
-  let regLine = null;
-  if (slope != null && intercept != null) {
-    const y0 = slope * xMin + intercept;
-    const y1 = slope * xMax + intercept;
-    regLine = { x1: sx(xMin), y1: sy(y0), x2: sx(xMax), y2: sy(y1) };
-  }
-
-  return (
-    <div ref={containerRef} style={{ width: "100%" }}>
-      <svg width={W} height={height} style={{ display: "block" }}>
-        <g transform={`translate(${pad.left},${pad.top})`}>
-          {/* Grid */}
-          {yTicks.map((y, i) => (
-            <line key={i} x1={0} y1={sy(y)} x2={cW} y2={sy(y)} stroke={t.border} strokeWidth={1} strokeDasharray="3,4" />
-          ))}
-          {/* Y labels */}
-          {yTicks.map((y, i) => (
-            <text key={i} x={-8} y={sy(y) + 4} textAnchor="end" fill={t.muted} fontSize={11} fontFamily="Inter,sans-serif">{Math.round(y)}</text>
-          ))}
-          <text x={-42} y={cH / 2} textAnchor="middle" fill={t.muted} fontSize={11} fontFamily="Inter,sans-serif"
-            transform={`rotate(-90,-42,${cH / 2})`}>Actual Liters</text>
-          {/* X labels */}
-          {xTicks.map((x, i) => (
-            <text key={i} x={sx(x)} y={cH + 18} textAnchor="middle" fill={t.muted} fontSize={11} fontFamily="Inter,sans-serif">{Math.round(x)}</text>
-          ))}
-          <text x={cW / 2} y={cH + 36} textAnchor="middle" fill={t.muted} fontSize={11} fontFamily="Inter,sans-serif">Sensor Value</text>
-          {/* Regression line */}
-          {regLine && (
-            <line x1={regLine.x1} y1={regLine.y1} x2={regLine.x2} y2={regLine.y2}
-              stroke={t.accent} strokeWidth={2} strokeDasharray="6,3" opacity={0.8} />
-          )}
-          {/* Scatter points */}
-          {points.map((p, i) => (
-            <g key={i}>
-              <circle cx={sx(p.sensorValue)} cy={sy(p.actualLiters)} r={6}
-                fill={t.accent} stroke={t.bg} strokeWidth={2} opacity={0.9} />
-              <text x={sx(p.sensorValue) + 9} y={sy(p.actualLiters) + 4}
-                fill={t.textSoft} fontSize={10} fontFamily="Inter,sans-serif">
-                ({Math.round(p.sensorValue)}, {p.actualLiters}L)
-              </text>
-            </g>
-          ))}
-        </g>
-      </svg>
-    </div>
-  );
-}
-
-function CalibrationView({ vehicles }) {
-  const { t } = useTheme();
-  const [selVehicle, setSelVehicle] = useState("");
-  const [points, setPoints] = useState([
-    { sensorValue: "", actualLiters: "" },
-    { sensorValue: "", actualLiters: "" },
-  ]);
-  const [result, setResult] = useState(null);      // { slope, intercept, r2 }
-  const [savedCal, setSavedCal] = useState(null);  // loaded from API
-  const [fetchingLive, setFetchingLive] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState(null);
-  const [success, setSuccess] = useState(null);
-
-  // Load saved calibration when vehicle changes
-  useEffect(() => {
-    if (!selVehicle) { setSavedCal(null); return; }
-    const veh = vehicles.find(v => v.plate === selVehicle || v.devIdno === selVehicle);
-    const devIdno = veh?.devIdno || selVehicle;
-    apiFetch(`/fuel/${encodeURIComponent(devIdno)}/calibration`)
-      .then(d => {
-        setSavedCal(d);
-        setResult({ slope: d.slope, intercept: d.intercept, r2: d.r2 });
-        // Pre-populate table from saved points
-        if (Array.isArray(d.points) && d.points.length >= 2) {
-          setPoints(d.points.map(p => ({ sensorValue: String(p.sensorValue), actualLiters: String(p.actualLiters) })));
-        }
-      })
-      .catch(() => { setSavedCal(null); setResult(null); });
-  }, [selVehicle, vehicles]);
-
-  const fetchLive = async () => {
-    if (!selVehicle) { setError("Select a vehicle first"); return; }
-    setFetchingLive(true); setError(null);
-    try {
-      const veh = vehicles.find(v => v.plate === selVehicle || v.devIdno === selVehicle);
-      const id  = veh?.plate || selVehicle;
-      const d   = await apiFetch(`/fuel/${encodeURIComponent(id)}/live`);
-      const rawSensor = d.fuelRaw ?? d.fuel;
-      if (rawSensor == null) throw new Error("No sensor value returned");
-      // Add new row pre-filled with current reading
-      setPoints(p => [...p, { sensorValue: String(rawSensor), actualLiters: "" }]);
-      setSuccess(`Fetched sensor reading: ${rawSensor} — fill in the actual liters`);
-      setTimeout(() => setSuccess(null), 4000);
-    } catch (e) { setError(e.message); }
-    setFetchingLive(false);
-  };
-
-  const updatePoint = (i, field, val) =>
-    setPoints(p => p.map((row, idx) => idx === i ? { ...row, [field]: val } : row));
-
-  const removePoint = i => setPoints(p => p.filter((_, idx) => idx !== i));
-
-  const addRow = () => setPoints(p => [...p, { sensorValue: "", actualLiters: "" }]);
-
-  const calibrate = async () => {
-    if (!selVehicle) { setError("Select a vehicle first"); return; }
-    const parsed = points
-      .filter(p => p.sensorValue !== "" && p.actualLiters !== "")
-      .map(p => ({ sensorValue: parseFloat(p.sensorValue), actualLiters: parseFloat(p.actualLiters) }))
-      .filter(p => !isNaN(p.sensorValue) && !isNaN(p.actualLiters));
-    if (parsed.length < 2) { setError("At least 2 valid data points required"); return; }
-
-    setSaving(true); setError(null);
-    try {
-      const veh = vehicles.find(v => v.plate === selVehicle || v.devIdno === selVehicle);
-      const devIdno = veh?.devIdno || selVehicle;
-      const res = await apiFetch(`/fuel/${encodeURIComponent(devIdno)}/calibration`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ points: parsed }),
-      });
-      setResult(res);
-      setSavedCal(res);
-      setSuccess(`Calibration saved! y = ${res.slope}x + ${res.intercept} (R² = ${res.r2})`);
-      setTimeout(() => setSuccess(null), 6000);
-    } catch (e) { setError(e.message); }
-    setSaving(false);
-  };
-
-  const deleteCal = async () => {
-    if (!selVehicle || !savedCal) return;
-    const veh = vehicles.find(v => v.plate === selVehicle || v.devIdno === selVehicle);
-    const devIdno = veh?.devIdno || selVehicle;
-    try {
-      await apiFetch(`/fuel/${encodeURIComponent(devIdno)}/calibration`, { method: "DELETE" });
-      setSavedCal(null); setResult(null);
-      setPoints([{ sensorValue: "", actualLiters: "" }, { sensorValue: "", actualLiters: "" }]);
-      setSuccess("Calibration removed");
-      setTimeout(() => setSuccess(null), 3000);
-    } catch (e) { setError(e.message); }
-  };
-
-  const validPoints = points
-    .filter(p => p.sensorValue !== "" && p.actualLiters !== "")
-    .map(p => ({ sensorValue: parseFloat(p.sensorValue), actualLiters: parseFloat(p.actualLiters) }))
-    .filter(p => !isNaN(p.sensorValue) && !isNaN(p.actualLiters));
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-      {/* Header */}
-      <Panel title="⚖ Fuel Sensor Calibration">
-        <div style={{ padding: 18 }}>
-          <p style={{ margin: "0 0 14px", color: t.textSoft, fontSize: 13, lineHeight: 1.6 }}>
-            Each vehicle's fuel sensor reads in raw units. Fill the table below — add the actual
-            liters you know are in the tank at different sensor readings — then press <b>Calibrate</b>.
-            The system finds the best-fit line (y = slope × sensor + intercept) and applies it
-            automatically to all fuel reports for that vehicle.
-          </p>
-          <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "flex-end" }}>
-            <div style={{ minWidth: 200 }}>
-              <Sel label="Vehicle" value={selVehicle} onChange={e => { setSelVehicle(e.target.value); setResult(null); setError(null); }}>
-                <option value="">— Select vehicle —</option>
-                {vehicles.map(v => (
-                  <option key={v.devIdno} value={v.plate || v.devIdno}>{v.plate || v.nm || v.devIdno}</option>
-                ))}
-              </Sel>
-            </div>
-            <Btn onClick={fetchLive} disabled={!selVehicle || fetchingLive} color={t.blue}>
-              {fetchingLive ? "Fetching…" : "⬇ Fetch Current Reading"}
-            </Btn>
-            {savedCal && (
-              <Btn onClick={deleteCal} color={t.red} outline>Remove Calibration</Btn>
-            )}
-          </div>
-          {error   && <div style={{ marginTop: 10 }}><ErrorBanner message={error} /></div>}
-          {success && <div style={{ marginTop: 10, padding: "10px 14px", background: `${t.green}22`, border: `1px solid ${t.green}`, borderRadius: 8, color: t.green, fontSize: 13 }}>{success}</div>}
-        </div>
-      </Panel>
-
-      {/* Main content: chart + table side-by-side (stacks on small screens) */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18, alignItems: "start" }}>
-
-        {/* Scatter chart */}
-        <Panel title={`Calibration Chart${result ? ` — R² = ${result.r2}` : ""}`}>
-          <div style={{ padding: "12px 8px 8px" }}>
-            <ScatterChart
-              points={validPoints}
-              slope={result?.slope}
-              intercept={result?.intercept}
-              height={300}
-            />
-            {result && (
-              <div style={{ padding: "10px 14px", background: t.bgAlt, borderRadius: 8, marginTop: 10, fontSize: 12 }}>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10 }}>
-                  {[
-                    ["Slope",     result.slope,     "sensor→L factor"],
-                    ["Intercept", result.intercept, "offset liters"],
-                    ["R²",        result.r2,        result.r2 >= 0.99 ? "excellent fit" : result.r2 >= 0.95 ? "good fit" : "poor fit — add more points"],
-                  ].map(([lbl, val, sub]) => (
-                    <div key={lbl} style={{ textAlign: "center" }}>
-                      <div style={{ color: t.accent, fontWeight: 700, fontSize: 16 }}>{val}</div>
-                      <div style={{ color: t.text,  fontWeight: 600, fontSize: 11 }}>{lbl}</div>
-                      <div style={{ color: t.muted, fontSize: 10 }}>{sub}</div>
-                    </div>
-                  ))}
-                </div>
-                <div style={{ marginTop: 10, color: t.textSoft, fontFamily: "monospace", fontSize: 12, textAlign: "center" }}>
-                  Liters = {result.slope} × sensor + {result.intercept}
-                </div>
-              </div>
-            )}
-          </div>
-        </Panel>
-
-        {/* Calibration table */}
-        <Panel title="Calibration Points" action={
-          <Btn onClick={addRow} color={t.blue} outline style={{ padding: "4px 12px", fontSize: 12 }}>+ Add Row</Btn>
-        }>
-          <div style={{ padding: "12px 14px" }}>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 36px", gap: 8, marginBottom: 8 }}>
-              <div style={{ color: t.muted, fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.8 }}>Sensor Value</div>
-              <div style={{ color: t.muted, fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.8 }}>Actual Liters</div>
-              <div />
-            </div>
-            {points.map((row, i) => (
-              <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 36px", gap: 8, marginBottom: 8 }}>
-                <input
-                  type="number"
-                  placeholder="e.g. 1408"
-                  value={row.sensorValue}
-                  onChange={e => updatePoint(i, "sensorValue", e.target.value)}
-                  style={{
-                    background: t.bgAlt, border: `1px solid ${t.border}`, borderRadius: 7,
-                    padding: "9px 12px", color: t.text, fontSize: 13, fontFamily: "inherit",
-                    outline: "none", width: "100%", boxSizing: "border-box",
-                  }}
-                />
-                <input
-                  type="number"
-                  placeholder="e.g. 120"
-                  value={row.actualLiters}
-                  onChange={e => updatePoint(i, "actualLiters", e.target.value)}
-                  style={{
-                    background: t.bgAlt, border: `1px solid ${t.border}`, borderRadius: 7,
-                    padding: "9px 12px", color: t.text, fontSize: 13, fontFamily: "inherit",
-                    outline: "none", width: "100%", boxSizing: "border-box",
-                  }}
-                />
-                <button
-                  onClick={() => removePoint(i)}
-                  disabled={points.length <= 2}
-                  style={{
-                    background: "transparent", border: `1px solid ${t.border}`, borderRadius: 7,
-                    color: t.red, cursor: points.length <= 2 ? "not-allowed" : "pointer",
-                    fontSize: 16, padding: 0, opacity: points.length <= 2 ? 0.3 : 1,
-                  }}>×</button>
-              </div>
-            ))}
-            <div style={{ marginTop: 6, color: t.muted, fontSize: 11, lineHeight: 1.5 }}>
-              Tip: refuel and note the sensor reading at different fill levels.<br />
-              More points = better accuracy.
-            </div>
-            <div style={{ marginTop: 16, display: "flex", gap: 10 }}>
-              <Btn onClick={calibrate} disabled={saving || validPoints.length < 2 || !selVehicle}>
-                {saving ? "Saving…" : "Calibrate"}
-              </Btn>
-            </div>
-          </div>
-        </Panel>
-      </div>
-
-      {/* How it works */}
-      <Panel title="How Calibration Works">
-        <div style={{ padding: "12px 18px 16px", color: t.textSoft, fontSize: 13, lineHeight: 1.7 }}>
-          <ol style={{ margin: 0, paddingLeft: 20 }}>
-            <li>Select the vehicle you want to calibrate.</li>
-            <li>Add fuel to the tank. Note how many liters you added (check the fuel pump meter).</li>
-            <li>Click <b>Fetch Current Reading</b> — the current raw sensor value will appear in a new row. Fill in the corresponding actual liters.</li>
-            <li>Repeat at different fill levels (empty, quarter, half, full). More points improve accuracy.</li>
-            <li>Click <b>Calibrate</b>. The system runs a linear regression and saves the conversion formula.</li>
-            <li>All fuel reports and the live view will now show values in <b>liters</b> for this vehicle.</li>
-          </ol>
-          <div style={{ marginTop: 10, padding: "8px 14px", background: t.bgAlt, borderRadius: 8, fontSize: 12 }}>
-            <b>Note:</b> R² (coefficient of determination) shows fit quality. R² ≥ 0.99 is excellent. If lower, add more calibration points.
-          </div>
-        </div>
-      </Panel>
-    </div>
-  );
-}
 
 // ── View: Fuel Consumption Report ─────────────────────────────────────────────
 
@@ -1594,6 +1269,128 @@ function VehicleModal({ vehicle, onClose, onViewVideo }) {
 }
 
 const CHANNEL_COUNT = 6;
+
+// ── Sidebar live stream player ─────────────────────────────────────────────────
+
+function useHlsJs() {
+  const [Hls, setHls] = useState(null);
+  useEffect(() => {
+    if (window.Hls) { setHls(() => window.Hls); return; }
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/hls.js@1.5.20/dist/hls.min.js';
+    s.onload = () => setHls(() => window.Hls);
+    s.onerror = () => {};
+    document.head.appendChild(s);
+  }, []);
+  return Hls;
+}
+
+function SidebarVideoPlayer({ vehicle, channel, onClose, onChannelChange }) {
+  const { t } = useTheme();
+  const Hls = useHlsJs();
+  const videoRef = useRef(null);
+  const hlsRef   = useRef(null);
+  const [streamData,  setStreamData]  = useState(null);
+  const [streamType,  setStreamType]  = useState('sub');
+  const [loading,     setLoading]     = useState(true);
+  const [error,       setError]       = useState(null);
+
+  // Fetch stream URL whenever vehicle / channel / streamType changes
+  useEffect(() => {
+    if (!vehicle) return;
+    setLoading(true); setError(null); setStreamData(null);
+    apiFetch(`/cameras/${encodeURIComponent(vehicle.devIdno)}/stream?channel=${channel}&streamType=${streamType}`)
+      .then(d => { setStreamData(d); setLoading(false); })
+      .catch(e => { setError(e.message); setLoading(false); });
+  }, [vehicle?.devIdno, channel, streamType]);
+
+  // Attach HLS.js once we have the stream URL
+  useEffect(() => {
+    if (!streamData?.hlsUrl || !videoRef.current) return;
+    if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
+    if (Hls?.isSupported()) {
+      const hls = new Hls({ lowLatencyMode: true, enableWorker: true });
+      hls.loadSource(streamData.hlsUrl);
+      hls.attachMedia(videoRef.current);
+      hls.on(Hls.Events.MANIFEST_PARSED, () => videoRef.current?.play().catch(() => {}));
+      hls.on(Hls.Events.ERROR, (_, d) => { if (d.fatal) setError(`Stream error: ${d.type}`); });
+      hlsRef.current = hls;
+    } else if (videoRef.current.canPlayType('application/vnd.apple.mpegurl')) {
+      videoRef.current.src = streamData.hlsUrl;
+      videoRef.current.play().catch(() => {});
+    } else {
+      // HLS not supported — fall through to iframe fallback below
+      setError('hls_not_supported');
+    }
+    return () => { if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; } };
+  }, [streamData, Hls]);
+
+  const label = vehicle.plate || vehicle.nm || vehicle.devIdno;
+  const showIframe = error === 'hls_not_supported' || (!loading && !error && !Hls && streamData?.playerUrl);
+
+  return (
+    <div style={{
+      position: 'fixed', bottom: 24, right: 24, width: 360, zIndex: 9999,
+      background: t.panel, border: `1px solid ${t.borderHi}`, borderRadius: 16,
+      boxShadow: '0 8px 40px rgba(0,0,0,0.4)', overflow: 'hidden', fontFamily: 'inherit',
+    }}>
+      {/* Header */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px', background: t.panelBright, borderBottom: `1px solid ${t.border}` }}>
+        <span style={{ fontSize: 16 }}>📷</span>
+        <span style={{ flex: 1, fontWeight: 700, fontSize: 13, color: t.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
+        <span style={{ color: t.muted, fontSize: 11, flexShrink: 0 }}>Ch {channel} · {streamType === 'sub' ? 'Sub' : 'Main'}</span>
+        <button onClick={onClose} style={{ background: 'transparent', border: 'none', color: t.red, cursor: 'pointer', fontSize: 20, lineHeight: 1, padding: 0 }}>×</button>
+      </div>
+
+      {/* Video area */}
+      <div style={{ background: '#000', aspectRatio: '16/9', position: 'relative', overflow: 'hidden' }}>
+        {loading && (
+          <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+            <div style={{ fontSize: 32 }}>📡</div>
+            <div style={{ color: '#888', fontSize: 12 }}>Connecting…</div>
+          </div>
+        )}
+        {!loading && error && error !== 'hls_not_supported' && (
+          <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, padding: 16, textAlign: 'center' }}>
+            <div style={{ fontSize: 28 }}>⚠</div>
+            <div style={{ color: t.red, fontSize: 11 }}>{error}</div>
+            {streamData?.playerUrl && (
+              <button onClick={() => window.open(streamData.playerUrl, '_blank')} style={{ marginTop: 4, background: t.accent, color: '#fff', border: 'none', borderRadius: 8, padding: '6px 14px', cursor: 'pointer', fontSize: 12, fontFamily: 'inherit' }}>Open in new tab</button>
+            )}
+          </div>
+        )}
+        {showIframe && streamData?.playerUrl
+          ? <iframe src={streamData.playerUrl} style={{ width: '100%', height: '100%', border: 'none', display: 'block' }} allow="autoplay; fullscreen" title="Live camera" />
+          : <video ref={videoRef} autoPlay muted playsInline controls style={{ width: '100%', height: '100%', display: loading || error ? 'none' : 'block' }} />
+        }
+      </div>
+
+      {/* Controls */}
+      <div style={{ padding: '8px 10px', display: 'flex', gap: 5, flexWrap: 'wrap', alignItems: 'center', background: t.panelBright, borderTop: `1px solid ${t.border}` }}>
+        {[1,2,3,4,5,6].map(ch => (
+          <button key={ch} onClick={() => onChannelChange(ch)} style={{
+            background: ch === channel ? t.accent : t.bgAlt,
+            border: `1px solid ${ch === channel ? t.accent : t.border}`,
+            borderRadius: 7, padding: '3px 9px', fontSize: 11, fontWeight: 700,
+            color: ch === channel ? '#fff' : t.textSoft,
+            cursor: 'pointer', fontFamily: 'inherit', transition: 'all 0.1s',
+          }}>Ch{ch}</button>
+        ))}
+        <div style={{ flex: 1 }} />
+        <button onClick={() => setStreamType(p => p === 'sub' ? 'main' : 'sub')} style={{
+          background: 'transparent', border: `1px solid ${t.border}`, borderRadius: 7,
+          padding: '3px 9px', fontSize: 11, color: t.textSoft, cursor: 'pointer', fontFamily: 'inherit',
+        }}>{streamType === 'sub' ? 'Sub ▸' : 'Main ▸'}</button>
+        {streamData?.playerUrl && (
+          <button onClick={() => window.open(streamData.playerUrl, '_blank')} style={{
+            background: 'transparent', border: `1px solid ${t.border}`, borderRadius: 7,
+            padding: '3px 9px', fontSize: 11, color: t.blue, cursor: 'pointer', fontFamily: 'inherit',
+          }}>⧉ Tab</button>
+        )}
+      </div>
+    </div>
+  );
+}
 
 function VideoModal({ vehicle, onClose }) {
   const { t } = useTheme();
@@ -2379,7 +2176,6 @@ const NAV = [
   { id: "notifs",      icon: "🔔", label: "Notifications" },
   { id: "fuel",        icon: "⛽", label: "Fuel Report"   },
   { id: "fuelrpt",     icon: "📅", label: "Daily/Monthly" },
-  { id: "calibration", icon: "⚖",  label: "Calibration"   },
   { id: "chat",        icon: "🤖", label: "FleetBot AI"   },
 ];
 
@@ -2388,6 +2184,8 @@ function FleetDashboardContent() {
   const [view, setView] = useState("dashboard");
   const [selectedVehicle, setSelectedVehicle] = useState(null);
   const [videoVehicle,    setVideoVehicle]    = useState(null);
+  const [sideStreamVehicle, setSideStreamVehicle] = useState(null);
+  const [sideChannel,       setSideChannel]       = useState(1);
 
   const [snapshot,     setSnapshot]     = useState(null);
   const [snapLoading,  setSnapLoading]  = useState(true);
@@ -2494,8 +2292,11 @@ function FleetDashboardContent() {
     finally { setAlarmLoading(false); }
   }, []);
 
+  // Always load vehicles on mount — needed for sidebar live cameras
+  useEffect(() => { fetchVehicles(); }, [fetchVehicles]);
+
   useEffect(() => {
-    if (view === "vehicles" || view === "fuel" || view === "fuelrpt" || view === "calibration") fetchVehicles();
+    if (view === "vehicles" || view === "fuel" || view === "fuelrpt") fetchVehicles();
     if (view === "alarms") fetchAlarms();
   }, [view, fetchVehicles, fetchAlarms]);
 
@@ -2578,6 +2379,39 @@ function FleetDashboardContent() {
             );
           })}
         </nav>
+
+        {/* Live Cameras */}
+        {vehicles.length > 0 && (
+          <div style={{ margin: "0 10px 4px", borderTop: `1px solid ${t.border}`, paddingTop: 10 }}>
+            <div style={{ color: t.muted, fontSize: 10, fontWeight: 700, letterSpacing: 1.5, padding: "0 4px 6px", textTransform: "uppercase" }}>📷 Live Cameras</div>
+            <div style={{ maxHeight: 180, overflowY: "auto" }}>
+              {vehicles.map(v => {
+                const isOnline = v.online !== 0;
+                const isActive = sideStreamVehicle?.devIdno === v.devIdno;
+                return (
+                  <div key={v.devIdno} style={{
+                    display: "flex", alignItems: "center", gap: 7, padding: "5px 6px",
+                    borderRadius: 8, marginBottom: 2,
+                    background: isActive ? `${t.accent}22` : "transparent",
+                  }}>
+                    <span style={{ fontSize: 9, color: isOnline ? t.green : t.muted, flexShrink: 0 }}>{isOnline ? "●" : "○"}</span>
+                    <span style={{ flex: 1, fontSize: 12, color: isOnline ? t.textSoft : t.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {v.plate || v.nm || v.devIdno}
+                    </span>
+                    <button onClick={() => {
+                      if (isActive) { setSideStreamVehicle(null); }
+                      else { setSideStreamVehicle(v); setSideChannel(1); }
+                    }} style={{
+                      background: isActive ? t.red : isOnline ? t.accent : t.muted,
+                      border: "none", borderRadius: 6, padding: "3px 9px",
+                      color: "#fff", fontSize: 11, cursor: "pointer", fontFamily: "inherit", fontWeight: 700, flexShrink: 0,
+                    }}>{isActive ? "■" : "▶"}</button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {/* Theme Toggle */}
         <div style={{ padding: "12px 16px", borderTop: `1px solid ${t.border}` }}>
@@ -2694,7 +2528,6 @@ function FleetDashboardContent() {
           {view === "notifs"      && <NotificationsView events={accEvents} onClear={clearNotifications} />}
           {view === "fuel"        && <FuelConsumptionView vehicles={vehicles} />}
           {view === "fuelrpt"     && <FuelDailyMonthlyView vehicles={vehicles} />}
-          {view === "calibration" && <CalibrationView vehicles={vehicles} />}
           {view === "chat"        && <ChatView />}
         </div>
       </div>
@@ -2710,9 +2543,17 @@ function FleetDashboardContent() {
         />
       )}
       {videoVehicle && (
-        <VideoModal 
-          vehicle={videoVehicle} 
-          onClose={() => setVideoVehicle(null)} 
+        <VideoModal
+          vehicle={videoVehicle}
+          onClose={() => setVideoVehicle(null)}
+        />
+      )}
+      {sideStreamVehicle && (
+        <SidebarVideoPlayer
+          vehicle={sideStreamVehicle}
+          channel={sideChannel}
+          onClose={() => setSideStreamVehicle(null)}
+          onChannelChange={setSideChannel}
         />
       )}
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
