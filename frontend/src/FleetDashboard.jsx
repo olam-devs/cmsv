@@ -569,16 +569,6 @@ function ColorPicker({ value, onChange }) {
   );
 }
 
-function Badge({ label, color }) {
-  return (
-    <span style={{
-      display: 'inline-block', padding: '2px 10px', borderRadius: 20,
-      background: color + '28', color, fontWeight: 700, fontSize: 11,
-      border: `1px solid ${color}55`,
-    }}>{label}</span>
-  );
-}
-
 function ErpModal({ title, onClose, children }) {
   const { t } = useTheme();
   return (
@@ -883,10 +873,10 @@ function FleetERPView({ vehicles }) {
                           <span style={{ color: v.online ? t.green : t.muted, fontWeight: 700, fontSize: 12 }}>{v.online ? '● Online' : '○ Offline'}</span>
                         </td>
                         <td style={{ padding: '10px 14px' }}>
-                          {co ? <Badge label={co.name} color={co.color} /> : <span style={{ color: t.muted, fontSize: 12 }}>—</span>}
+                          {co ? <Badge text={co.name} color={co.color} /> : <span style={{ color: t.muted, fontSize: 12 }}>—</span>}
                         </td>
                         <td style={{ padding: '10px 14px' }}>
-                          {cat ? <Badge label={cat.name} color={cat.color} /> : <span style={{ color: t.muted, fontSize: 12 }}>—</span>}
+                          {cat ? <Badge text={cat.name} color={cat.color} /> : <span style={{ color: t.muted, fontSize: 12 }}>—</span>}
                         </td>
                         <td style={{ padding: '10px 14px', textAlign: 'right' }}>
                           <button onClick={() => setAssignModal({ devIdno: v.devIdno, plate: v.plate, companyId: v.companyId || '', categoryId: v.categoryId || '' })}
