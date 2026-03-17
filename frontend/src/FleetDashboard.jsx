@@ -550,7 +550,7 @@ function totalConsumption(data) {
   return Math.round(used * 10) / 10;
 }
 
-// ── View: Fleet ERP (Companies / Categories / Vehicle Assignment) ─────────────
+// ── View: HELION (Companies / Categories / Vehicle Assignment) ────────────────
 
 const ERP_COLORS = ['#4318d1','#7551ff','#05cd99','#39b8ff','#ff9500','#ee5d50','#868cff','#21d4fd'];
 
@@ -709,7 +709,7 @@ function FleetERPView({ vehicles, onCompanySelect, activeCompanyId: activeCoid }
     cursor: 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit',
   });
 
-  if (loading) return <Spinner label="Loading fleet organisation…" />;
+  if (loading) return <Spinner label="Loading HELION…" />;
   if (error)   return <div style={{ padding: 24 }}><ErrorBanner message={error} onRetry={reload} /></div>;
 
   const unassignedCount = summary?.unassigned?.length ?? 0;
@@ -720,7 +720,7 @@ function FleetERPView({ vehicles, onCompanySelect, activeCompanyId: activeCoid }
       {/* Header row */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10 }}>
         <div>
-          <h2 style={{ margin: 0, fontSize: 20, fontWeight: 800, color: t.text }}>🏢 Fleet Organisation</h2>
+          <h2 style={{ margin: 0, fontSize: 20, fontWeight: 800, color: t.text }}>🏢 HELION</h2>
           <div style={{ color: t.muted, fontSize: 13, marginTop: 3 }}>
             {companies.length} compan{companies.length === 1 ? 'y' : 'ies'} · {categories.length} categories
             {unassignedCount > 0 && <span style={{ color: t.orange, marginLeft: 10, fontWeight: 700 }}>⚠ {unassignedCount} unassigned</span>}
@@ -3103,7 +3103,7 @@ const NAV = [
   { id: "dashboard",   icon: "◈",  label: "Dashboard"     },
   { id: "vehicles",    icon: "🚌", label: "Vehicles"      },
   { id: "cameras",     icon: "📷", label: "Live Cameras"  },
-  { id: "erp",         icon: "🏢", label: "Fleet ERP"     },
+  { id: "erp",         icon: "🏢", label: "HELION"     },
   { id: "alarms",      icon: "⚡", label: "Alarms"        },
   { id: "notifs",      icon: "🔔", label: "Notifications" },
   { id: "fuel",        icon: "⛽", label: "Fuel Report"   },
@@ -3284,7 +3284,7 @@ function FleetDashboardContent() {
 
         {/* ERP Company Switcher */}
         <div style={{ margin: "0 10px 10px" }}>
-          <div style={{ color: t.muted, fontSize: 10, fontWeight: 700, letterSpacing: 1.4, padding: "0 4px 7px", textTransform: "uppercase" }}>Fleet Context</div>
+          <div style={{ color: t.muted, fontSize: 10, fontWeight: 700, letterSpacing: 1.4, padding: "0 4px 7px", textTransform: "uppercase" }}>HELION</div>
           <div style={{ display: "flex", flexDirection: "column", gap: 3, maxHeight: 180, overflowY: "auto" }}>
             {/* All Companies */}
             <button onClick={() => setActiveCompanyId(null)} style={{
