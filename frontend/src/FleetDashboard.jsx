@@ -1195,7 +1195,7 @@ function BulkAssignModal({ count, companies, categories, onSave, onClose }) {
 const THRESHOLD_OPTIONS = [5, 10, 15, 20, 25, 30, 40, 50];
 const today = () => new Date().toISOString().slice(0, 10);
 
-function FuelConsumptionView({ vehicles }) {
+function FuelConsumptionView({ vehicles, erpSummary }) {
   const { t } = useTheme();
   const todayStr = today();
   const [begintime, setBegintime] = useState(`${todayStr} 00:00:00`);
@@ -1209,6 +1209,7 @@ function FuelConsumptionView({ vehicles }) {
   const [fuelData,  setFuelData]  = useState(null);
   const [events,    setEvents]    = useState([]);
   const [preset,    setPreset]    = useState("custom");
+  const { filterBar, filtered: erpFiltered } = useFleetFilter(vehicles, erpSummary);
 
   const applyPreset = (p) => {
     setPreset(p);
@@ -1278,6 +1279,7 @@ function FuelConsumptionView({ vehicles }) {
       {/* Query form */}
       <Panel title="⛽ Fuel Consumption Report — Query">
         <div style={{ padding: 18 }}>
+          {filterBar}
           {/* Preset row */}
           <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
             <span style={{ color: t.textSoft, fontSize: 12, alignSelf: "center" }}>Sel Time:</span>
@@ -1299,7 +1301,7 @@ function FuelConsumptionView({ vehicles }) {
               placeholder="YYYY-MM-DD HH:mm:ss" />
             <Sel label="Vehicle" value={vehicle} onChange={e => setVehicle(e.target.value)}>
               <option value="">Please Select</option>
-              {vehicles.map(v => (
+              {erpFiltered.map(v => (
                 <option key={v.devIdno} value={v.plate || v.devIdno}>{v.plate || v.nm || v.devIdno}</option>
               ))}
             </Sel>
@@ -1414,7 +1416,7 @@ function FuelConsumptionView({ vehicles }) {
 
 // ── View: Daily / Monthly Fuel Report ─────────────────────────────────────────
 
-function FuelDailyMonthlyView({ vehicles }) {
+function FuelDailyMonthlyView({ vehicles, erpSummary }) {
   const { t } = useTheme();
   const nowDate = today();
   const monthAgo = new Date(Date.now() - 28 * 86400000).toISOString().slice(0, 10);
@@ -1425,6 +1427,7 @@ function FuelDailyMonthlyView({ vehicles }) {
   const [loading,    setLoading]    = useState(false);
   const [error,      setError]      = useState(null);
   const [report,     setReport]     = useState(null);
+  const { filterBar, filtered: erpFiltered } = useFleetFilter(vehicles, erpSummary);
 
   const query = async () => {
     setLoading(true); setError(null); setReport(null);
@@ -1492,12 +1495,13 @@ function FuelDailyMonthlyView({ vehicles }) {
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
       <Panel title="📅 Fuel Daily / Monthly Report — Query">
         <div style={{ padding: 18 }}>
+          {filterBar}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(190px, 1fr))", gap: 14, marginBottom: 16 }}>
             <Inp label="Starting Date" type="date" value={startDate} onChange={e => setStartDate(e.target.value)} />
             <Inp label="End Date"      type="date" value={endDate}   onChange={e => setEndDate(e.target.value)} />
             <Sel label="Vehicle" value={vehicle} onChange={e => setVehicle(e.target.value)}>
               <option value="all">All Vehicles</option>
-              {vehicles.map(v => (
+              {erpFiltered.map(v => (
                 <option key={v.devIdno} value={v.plate || v.devIdno}>{v.plate || v.nm || v.devIdno}</option>
               ))}
             </Sel>
@@ -1690,38 +1694,102 @@ function DashboardView({ snapshot, activeCompany, filteredVehicles = [] }) {
   );
 }
 
+// ── Shared: Fleet Filter Bar ──────────────────────────────────────────────────
+// Returns JSX filter bar + a filteredList derived from vehicles prop.
+// Usage: const { filterBar, filtered } = useFleetFilter(vehicles, erpSummary);
+
+function useFleetFilter(vehicles, erpSummary) {
+  const { t } = useTheme();
+  const [companyId,  setCompanyId]  = useState('');
+  const [categoryId, setCategoryId] = useState('');
+  const [search,     setSearch]     = useState('');
+
+  const companies  = erpSummary?.companies  || [];
+  const categories = erpSummary?.categories || [];
+
+  // Build a map: devIdno → { companyId, categoryId } from erpSummary
+  const assignMap = {};
+  for (const co of companies) {
+    for (const v of (co.vehicles || [])) {
+      assignMap[v.devIdno] = { companyId: co.id, categoryId: v.categoryId || null };
+    }
+  }
+
+  const filtered = vehicles.filter(v => {
+    const a = assignMap[v.devIdno] || {};
+    if (companyId  && a.companyId  !== companyId)  return false;
+    if (categoryId && a.categoryId !== categoryId) return false;
+    if (search) {
+      const q = search.toLowerCase();
+      if (!(v.plate || '').toLowerCase().includes(q) && !(v.devIdno || '').includes(q)) return false;
+    }
+    return true;
+  });
+
+  const filterBar = (
+    <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginBottom: 16 }}>
+      <input
+        value={search} onChange={e => setSearch(e.target.value)}
+        placeholder="Search plate or device ID…"
+        style={{ background: t.panel, border: `1.5px solid ${t.border}`, borderRadius: 10, padding: '9px 14px', color: t.text, fontSize: 13, outline: 'none', fontFamily: 'inherit', minWidth: 200, flex: 1 }}
+      />
+      {companies.length > 0 && (
+        <select value={companyId} onChange={e => { setCompanyId(e.target.value); setCategoryId(''); }}
+          style={{ background: t.panel, border: `1.5px solid ${t.border}`, borderRadius: 10, padding: '9px 14px', color: companyId ? t.text : t.muted, fontSize: 13, fontFamily: 'inherit', outline: 'none', cursor: 'pointer' }}>
+          <option value="">All Companies</option>
+          {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </select>
+      )}
+      {categories.length > 0 && (
+        <select value={categoryId} onChange={e => setCategoryId(e.target.value)}
+          style={{ background: t.panel, border: `1.5px solid ${t.border}`, borderRadius: 10, padding: '9px 14px', color: categoryId ? t.text : t.muted, fontSize: 13, fontFamily: 'inherit', outline: 'none', cursor: 'pointer' }}>
+          <option value="">All Categories</option>
+          {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </select>
+      )}
+      {(search || companyId || categoryId) && (
+        <button onClick={() => { setSearch(''); setCompanyId(''); setCategoryId(''); }}
+          style={{ background: 'transparent', border: `1px solid ${t.border}`, borderRadius: 10, padding: '9px 14px', color: t.muted, cursor: 'pointer', fontSize: 12, fontFamily: 'inherit' }}>
+          ✕ Clear
+        </button>
+      )}
+      <span style={{ color: t.muted, fontSize: 12, whiteSpace: 'nowrap' }}>{filtered.length} vehicle{filtered.length !== 1 ? 's' : ''}</span>
+    </div>
+  );
+
+  return { filterBar, filtered };
+}
+
 // ── View: Vehicles ────────────────────────────────────────────────────────────
 
-function VehiclesView({ vehicles, loading, error, onRetry, onSelect }) {
+function VehiclesView({ vehicles, loading, error, onRetry, onSelect, erpSummary }) {
   const { t } = useTheme();
-  const [search, setSearch] = useState("");
-  const [filter, setFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const { filterBar, filtered: fleetFiltered } = useFleetFilter(vehicles, erpSummary);
+
   if (loading) return <Spinner label="Loading vehicles…" />;
   if (error)   return <ErrorBanner message={error} onRetry={onRetry} />;
 
-  const filtered = vehicles.filter(v => {
-    const m = (v.plate || "").toLowerCase().includes(search.toLowerCase()) || (v.devIdno || "").includes(search);
-    const f = filter === "all" || (filter === "online" && v.online === 1) || (filter === "offline" && v.online === 0) || (filter === "alarm" && v.online === 2);
-    return m && f;
+  const filtered = fleetFiltered.filter(v => {
+    if (statusFilter === "online")  return v.online === 1;
+    if (statusFilter === "offline") return v.online === 0;
+    if (statusFilter === "alarm")   return v.online === 2;
+    return true;
   });
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      <div style={{ display: "flex", gap: 10 }}>
-        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search plate or device ID…" style={{
-          background: t.panel, border: `1.5px solid ${t.border}`, borderRadius: 10,
-          padding: "10px 14px", color: t.text, flex: 1, fontSize: 13, outline: "none",
-          fontFamily: "inherit",
-        }} />
+      {filterBar}
+      <div style={{ display: "flex", gap: 8 }}>
         {["all", "online", "offline", "alarm"].map(f => (
-          <button key={f} onClick={() => setFilter(f)} style={{
-            background: filter === f ? `linear-gradient(135deg, ${t.accent}, ${t.accentAlt})` : t.panel,
-            border: `1.5px solid ${filter === f ? "transparent" : t.border}`,
-            borderRadius: 10, padding: "10px 16px",
-            color: filter === f ? "#fff" : t.textSoft,
+          <button key={f} onClick={() => setStatusFilter(f)} style={{
+            background: statusFilter === f ? `linear-gradient(135deg, ${t.accent}, ${t.accentAlt})` : t.panel,
+            border: `1.5px solid ${statusFilter === f ? "transparent" : t.border}`,
+            borderRadius: 10, padding: "8px 16px",
+            color: statusFilter === f ? "#fff" : t.textSoft,
             cursor: "pointer", fontWeight: 700, fontSize: 12, textTransform: "uppercase", letterSpacing: 1,
             fontFamily: "inherit",
-            boxShadow: filter === f ? `0 4px 14px ${t.accentGlow}` : "none",
+            boxShadow: statusFilter === f ? `0 4px 14px ${t.accentGlow}` : "none",
           }}>{f}</button>
         ))}
       </div>
@@ -1791,35 +1859,221 @@ function AlarmsView({ alarms, loading, error, onRetry }) {
     return t.textSoft;
   };
 
+  const alarmIcon = (type = "") => {
+    if (type.includes("Speed")) return "🚨";
+    if (type.includes("Fuel"))  return "⛽";
+    if (type.includes("Fence")) return "📍";
+    if (type.includes("Fatigue")) return "😴";
+    return "⚡";
+  };
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      {/* What are alarms? */}
+      <div style={{
+        background: t.blueSoft, border: `1px solid ${t.blue}44`, borderRadius: 14,
+        padding: "14px 18px", display: "flex", gap: 14, alignItems: "flex-start",
+      }}>
+        <span style={{ fontSize: 20, flexShrink: 0 }}>ℹ️</span>
+        <div style={{ fontSize: 13, color: t.textSoft, lineHeight: 1.7 }}>
+          <b style={{ color: t.text }}>What are alarms?</b> Alarms are triggered automatically by your GPS devices when
+          certain conditions are detected — for example a vehicle exceeding the speed limit, crossing a geo-fence boundary,
+          a fuel drop, or driver fatigue. The list below shows all alarms recorded <b>today</b>.
+          Configure alarm rules in <b>CMSV6 → Alert Rules</b>.
+        </div>
+      </div>
+
+      {/* Type filter pills */}
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         {types.map(tp => (
           <button key={tp} onClick={() => setTypeFilter(tp)} style={{
             background: typeFilter === tp ? t.accent : t.panel,
             border: `1px solid ${typeFilter === tp ? t.accent : t.border}`,
             borderRadius: 20, padding: "6px 14px",
-            color: typeFilter === tp ? "#000" : t.textSoft,
+            color: typeFilter === tp ? "#fff" : t.textSoft,
             cursor: "pointer", fontSize: 12, fontWeight: typeFilter === tp ? 700 : 400,
-          }}>{tp}</button>
+            fontFamily: "inherit",
+          }}>{tp === "all" ? `All (${alarms.length})` : tp}</button>
         ))}
       </div>
+
       <Panel title={`ALARMS TODAY (${filtered.length})`}>
         {filtered.length === 0
-          ? <Empty icon="✅" text="No alarms found" />
+          ? <Empty icon="✅" text="No alarms found for selected type" />
           : filtered.map((a, i) => (
-            <div key={a.id || i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "13px 18px", borderBottom: `1px solid ${t.border}` }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-                <Badge text={a.alarmTypeName || `Type ${a.atp}`} color={color(a.alarmTypeName || "")} />
-                <span style={{ fontFamily: "inherit", color: t.text, fontWeight: 700 }}>{a.plate || a.nm || a.devIdno}</span>
-                {a.speed && <span style={{ color: t.textSoft, fontSize: 12 }}>{a.speed} km/h</span>}
+            <div key={a.id || i} style={{
+              display: "flex", justifyContent: "space-between", alignItems: "center",
+              padding: "13px 18px", borderBottom: `1px solid ${t.border}`,
+              background: i % 2 ? `${t.bgAlt}55` : "transparent",
+            }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <span style={{ fontSize: 18 }}>{alarmIcon(a.alarmTypeName || "")}</span>
+                <div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <Badge text={a.alarmTypeName || `Type ${a.atp}`} color={color(a.alarmTypeName || "")} />
+                    <span style={{ fontFamily: "inherit", color: t.text, fontWeight: 700 }}>{a.plate || a.nm || a.devIdno}</span>
+                  </div>
+                  {a.speed > 0 && (
+                    <div style={{ color: t.red, fontSize: 12, marginTop: 3 }}>Speed: {a.speed} km/h</div>
+                  )}
+                </div>
               </div>
-              <span style={{ color: t.textSoft, fontSize: 12, fontFamily: "inherit" }}>
-                {a.alarmTime ? new Date(a.alarmTime).toLocaleTimeString() : (a.at || "—")}
-              </span>
+              <div style={{ textAlign: "right" }}>
+                <div style={{ color: t.textSoft, fontSize: 12, fontFamily: "inherit" }}>
+                  {a.alarmTime ? new Date(a.alarmTime).toLocaleTimeString("en-TZ", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : (a.at || "—")}
+                </div>
+                {a.alarmTime && (
+                  <div style={{ color: t.muted, fontSize: 11 }}>
+                    {new Date(a.alarmTime).toLocaleDateString("en-TZ")}
+                  </div>
+                )}
+              </div>
             </div>
           ))}
       </Panel>
+    </div>
+  );
+}
+
+// ── View: Live Cameras ────────────────────────────────────────────────────────
+
+function LiveCamerasView({ vehicles, erpSummary }) {
+  const { t } = useTheme();
+  const [streamVehicle, setStreamVehicle] = useState(null);
+  const [channel, setChannel]             = useState(1);
+  const { filterBar, filtered: erpFiltered } = useFleetFilter(vehicles, erpSummary);
+  const [onlineOnly, setOnlineOnly]       = useState(true);
+
+  // Only show vehicles that are online (can stream)
+  const displayVehicles = erpFiltered.filter(v => !onlineOnly || (v.online !== 0 && v.online != null));
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      {/* Filter bar */}
+      {filterBar}
+
+      {/* Online-only toggle + count */}
+      <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+        <button onClick={() => setOnlineOnly(p => !p)} style={{
+          display: "flex", alignItems: "center", gap: 8,
+          background: onlineOnly ? t.greenSoft : t.panel,
+          border: `1.5px solid ${onlineOnly ? t.green : t.border}`,
+          borderRadius: 10, padding: "8px 16px",
+          color: onlineOnly ? t.green : t.textSoft,
+          cursor: "pointer", fontWeight: 700, fontSize: 12, fontFamily: "inherit",
+        }}>
+          <div style={{ width: 8, height: 8, borderRadius: "50%", background: onlineOnly ? t.green : t.muted, boxShadow: onlineOnly ? `0 0 6px ${t.green}` : "none" }} />
+          {onlineOnly ? "Online Only" : "All Vehicles"}
+        </button>
+        <span style={{ color: t.muted, fontSize: 13 }}>
+          {displayVehicles.length} vehicle{displayVehicles.length !== 1 ? "s" : ""} available to stream
+        </span>
+      </div>
+
+      {displayVehicles.length === 0 && (
+        <div style={{
+          textAlign: "center", padding: "60px 40px",
+          background: t.panel, borderRadius: 16, border: `1px solid ${t.border}`,
+        }}>
+          <div style={{ fontSize: 48, marginBottom: 12 }}>📷</div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: t.text, marginBottom: 6 }}>
+            {onlineOnly ? "No vehicles online right now" : "No vehicles found"}
+          </div>
+          <div style={{ fontSize: 13, color: t.muted, marginBottom: 16 }}>
+            {onlineOnly ? "Live camera streaming requires the vehicle to be online and connected." : "Try adjusting your filters."}
+          </div>
+          {onlineOnly && (
+            <button onClick={() => setOnlineOnly(false)} style={{
+              background: t.accentSoft, border: `1px solid ${t.accent}`, borderRadius: 10,
+              padding: "8px 18px", color: t.accent, cursor: "pointer", fontSize: 13, fontWeight: 700,
+              fontFamily: "inherit",
+            }}>Show All Vehicles</button>
+          )}
+        </div>
+      )}
+
+      {/* Vehicle camera cards grid */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 14 }}>
+        {displayVehicles.map(v => {
+          const isStreaming = streamVehicle?.devIdno === v.devIdno;
+          const isOnline = v.online !== 0 && v.online != null;
+          return (
+            <div key={v.devIdno} style={{
+              borderRadius: 14, overflow: "hidden",
+              border: `1.5px solid ${isStreaming ? t.accent : t.border}`,
+              background: t.panel,
+              boxShadow: isStreaming ? `0 4px 20px ${t.accentGlow}` : "0 2px 8px rgba(0,0,0,0.05)",
+              transition: "all 0.2s",
+            }}>
+              {/* Camera preview area */}
+              <div style={{
+                height: 140, background: isStreaming ? "#000" : t.bgAlt,
+                display: "flex", alignItems: "center", justifyContent: "center",
+                position: "relative",
+              }}>
+                {isStreaming ? (
+                  <SidebarVideoPlayer
+                    vehicle={v} channel={channel}
+                    onClose={() => setStreamVehicle(null)}
+                    onChannelChange={setChannel}
+                    embedded
+                  />
+                ) : (
+                  <div style={{ textAlign: "center" }}>
+                    <div style={{ fontSize: 36, marginBottom: 6 }}>📷</div>
+                    <div style={{ color: isOnline ? t.textSoft : t.muted, fontSize: 12 }}>
+                      {isOnline ? "Click to stream" : "Offline"}
+                    </div>
+                  </div>
+                )}
+                {/* Online indicator */}
+                <div style={{
+                  position: "absolute", top: 8, right: 8,
+                  width: 8, height: 8, borderRadius: "50%",
+                  background: isOnline ? t.green : t.muted,
+                  boxShadow: isOnline ? `0 0 6px ${t.green}` : "none",
+                }} />
+              </div>
+              {/* Card footer */}
+              <div style={{ padding: "10px 14px", display: "flex", alignItems: "center", gap: 10 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 700, fontSize: 13, color: t.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {v.plate || v.nm || v.devIdno}
+                  </div>
+                  <div style={{ color: isOnline ? t.green : t.muted, fontSize: 11, marginTop: 2 }}>
+                    {isOnline ? "● Online" : "○ Offline"}
+                    {v.accOn && <span style={{ color: t.green, marginLeft: 8 }}>ACC ON</span>}
+                  </div>
+                </div>
+                <button
+                  onClick={() => { setStreamVehicle(isStreaming ? null : v); setChannel(1); }}
+                  disabled={!isOnline}
+                  style={{
+                    background: isStreaming ? t.red : isOnline ? `linear-gradient(135deg, ${t.accent}, ${t.accentAlt})` : t.bgAlt,
+                    border: "none", borderRadius: 9, padding: "6px 14px",
+                    color: isOnline ? "#fff" : t.muted, cursor: isOnline ? "pointer" : "not-allowed",
+                    fontSize: 12, fontWeight: 700, fontFamily: "inherit",
+                    boxShadow: isStreaming || !isOnline ? "none" : `0 2px 10px ${t.accentGlow}`,
+                  }}>
+                  {isStreaming ? "■ Stop" : "▶ Stream"}
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Full-screen video button when streaming */}
+      {streamVehicle && (
+        <div style={{ position: "fixed", bottom: 24, right: 24, zIndex: 500 }}>
+          <button style={{
+            background: `linear-gradient(135deg, ${t.accent}, ${t.accentAlt})`,
+            border: "none", borderRadius: 12, padding: "12px 20px",
+            color: "#fff", cursor: "pointer", fontSize: 13, fontWeight: 700,
+            fontFamily: "inherit", boxShadow: `0 4px 20px ${t.accentGlow}`,
+          }}>📹 {streamVehicle.plate} — Ch {channel}</button>
+        </div>
+      )}
     </div>
   );
 }
@@ -2848,6 +3102,7 @@ function NotificationsView({ events, onClear }) {
 const NAV = [
   { id: "dashboard",   icon: "◈",  label: "Dashboard"     },
   { id: "vehicles",    icon: "🚌", label: "Vehicles"      },
+  { id: "cameras",     icon: "📷", label: "Live Cameras"  },
   { id: "erp",         icon: "🏢", label: "Fleet ERP"     },
   { id: "alarms",      icon: "⚡", label: "Alarms"        },
   { id: "notifs",      icon: "🔔", label: "Notifications" },
@@ -2986,7 +3241,7 @@ function FleetDashboardContent() {
   useEffect(() => { fetchVehicles(); }, [fetchVehicles]);
 
   useEffect(() => {
-    if (view === "vehicles" || view === "fuel" || view === "fuelrpt" || view === "erp") fetchVehicles();
+    if (view === "vehicles" || view === "cameras" || view === "fuel" || view === "fuelrpt" || view === "erp") fetchVehicles();
     if (view === "alarms") fetchAlarms();
   }, [view, fetchVehicles, fetchAlarms]);
 
@@ -3119,39 +3374,6 @@ function FleetDashboardContent() {
           })}
         </nav>
 
-        {/* Live Cameras */}
-        {vehicles.length > 0 && (
-          <div style={{ margin: "0 10px 4px", borderTop: `1px solid ${t.border}`, paddingTop: 10 }}>
-            <div style={{ color: t.muted, fontSize: 10, fontWeight: 700, letterSpacing: 1.5, padding: "0 4px 6px", textTransform: "uppercase" }}>📷 Live Cameras</div>
-            <div style={{ maxHeight: 180, overflowY: "auto" }}>
-              {vehicles.map(v => {
-                const isOnline = v.online !== 0;
-                const isActive = sideStreamVehicle?.devIdno === v.devIdno;
-                return (
-                  <div key={v.devIdno} style={{
-                    display: "flex", alignItems: "center", gap: 7, padding: "5px 6px",
-                    borderRadius: 8, marginBottom: 2,
-                    background: isActive ? `${t.accent}22` : "transparent",
-                  }}>
-                    <span style={{ fontSize: 9, color: isOnline ? t.green : t.muted, flexShrink: 0 }}>{isOnline ? "●" : "○"}</span>
-                    <span style={{ flex: 1, fontSize: 12, color: isOnline ? t.textSoft : t.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {v.plate || v.nm || v.devIdno}
-                    </span>
-                    <button onClick={() => {
-                      if (isActive) { setSideStreamVehicle(null); }
-                      else { setSideStreamVehicle(v); setSideChannel(1); }
-                    }} style={{
-                      background: isActive ? t.red : isOnline ? t.accent : t.muted,
-                      border: "none", borderRadius: 6, padding: "3px 9px",
-                      color: "#fff", fontSize: 11, cursor: "pointer", fontFamily: "inherit", fontWeight: 700, flexShrink: 0,
-                    }}>{isActive ? "■" : "▶"}</button>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
         {/* Theme Toggle */}
         <div style={{ padding: "12px 16px", borderTop: `1px solid ${t.border}` }}>
           <button onClick={toggleTheme} style={{
@@ -3274,7 +3496,7 @@ function FleetDashboardContent() {
           {view === "vehicles" && (
             <VehiclesView vehicles={filteredVehicles} loading={vehLoading} error={vehError}
               onRetry={() => { vehiclesFetched.current = false; fetchVehicles(); }}
-              onSelect={setSelectedVehicle} />
+              onSelect={setSelectedVehicle} erpSummary={erpSummary} />
           )}
           {view === "alarms" && (
             <AlarmsView alarms={alarms} loading={alarmLoading} error={alarmError}
@@ -3282,8 +3504,9 @@ function FleetDashboardContent() {
           )}
           {view === "erp"         && <FleetERPView vehicles={filteredVehicles} onCompanySelect={setActiveCompanyId} activeCompanyId={activeCompanyId} />}
           {view === "notifs"      && <NotificationsView events={accEvents} onClear={clearNotifications} />}
-          {view === "fuel"        && <FuelConsumptionView vehicles={filteredVehicles} />}
-          {view === "fuelrpt"     && <FuelDailyMonthlyView vehicles={filteredVehicles} />}
+          {view === "cameras"     && <LiveCamerasView vehicles={filteredVehicles} erpSummary={erpSummary} />}
+          {view === "fuel"        && <FuelConsumptionView vehicles={filteredVehicles} erpSummary={erpSummary} />}
+          {view === "fuelrpt"     && <FuelDailyMonthlyView vehicles={filteredVehicles} erpSummary={erpSummary} />}
           {view === "chat"        && <ChatView />}
         </div>
       </div>
