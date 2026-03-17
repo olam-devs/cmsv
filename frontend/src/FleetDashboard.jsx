@@ -709,7 +709,7 @@ function FleetERPView({ vehicles, onCompanySelect, activeCompanyId: activeCoid }
     cursor: 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit',
   });
 
-  if (loading) return <Spinner label="Loading HELION…" />;
+  if (loading) return <Spinner label="Loading Fleet Settings…" />;
   if (error)   return <div style={{ padding: 24 }}><ErrorBanner message={error} onRetry={reload} /></div>;
 
   const unassignedCount = summary?.unassigned?.length ?? 0;
@@ -720,7 +720,7 @@ function FleetERPView({ vehicles, onCompanySelect, activeCompanyId: activeCoid }
       {/* Header row */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10 }}>
         <div>
-          <h2 style={{ margin: 0, fontSize: 20, fontWeight: 800, color: t.text }}>🏢 HELION</h2>
+          <h2 style={{ margin: 0, fontSize: 20, fontWeight: 800, color: t.text }}>🏢 Fleet Settings</h2>
           <div style={{ color: t.muted, fontSize: 13, marginTop: 3 }}>
             {companies.length} compan{companies.length === 1 ? 'y' : 'ies'} · {categories.length} categories
             {unassignedCount > 0 && <span style={{ color: t.orange, marginLeft: 10, fontWeight: 700 }}>⚠ {unassignedCount} unassigned</span>}
@@ -3103,7 +3103,7 @@ const NAV = [
   { id: "dashboard",   icon: "◈",  label: "Dashboard"     },
   { id: "vehicles",    icon: "🚌", label: "Vehicles"      },
   { id: "cameras",     icon: "📷", label: "Live Cameras"  },
-  { id: "erp",         icon: "🏢", label: "HELION"     },
+  { id: "erp",         icon: "🏢", label: "Fleet Settings"     },
   { id: "alarms",      icon: "⚡", label: "Alarms"        },
   { id: "notifs",      icon: "🔔", label: "Notifications" },
   { id: "fuel",        icon: "⛽", label: "Fuel Report"   },
@@ -3276,7 +3276,7 @@ function FleetDashboardContent() {
               fontSize: 22, boxShadow: `0 6px 20px ${t.accentGlow}`,
             }}>🚌</div>
             <div>
-              <div style={{ fontWeight: 800, fontSize: 16, color: t.text, letterSpacing: -0.3 }}>Star Link</div>
+              <div style={{ fontWeight: 800, fontSize: 16, color: t.text, letterSpacing: -0.3 }}>HELION</div>
               <div style={{ color: t.textSoft, fontSize: 12, fontWeight: 400 }}>Fleet Management</div>
             </div>
           </div>
