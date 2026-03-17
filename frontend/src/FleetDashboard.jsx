@@ -585,7 +585,7 @@ function ErpModal({ title, onClose, children }) {
   );
 }
 
-function FleetERPView({ vehicles }) {
+function FleetERPView({ vehicles, onCompanySelect, activeCompanyId: activeCoid }) {
   const { t } = useTheme();
   const [tab,       setTab]       = useState('board');
   const [summary,   setSummary]   = useState(null);   // { companies, categories, unassigned }
@@ -717,113 +717,195 @@ function FleetERPView({ vehicles }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
 
-      {/* Header + tabs */}
-      <Panel title="🏢 Fleet Organisation — ERP" action={
-        <div style={{ display: 'flex', gap: 8 }}>
-          <Btn onClick={() => setCatModal({ name: '', color: ERP_COLORS[2] })} color={t.green} outline style={{ fontSize: 12, padding: '6px 14px' }}>+ Category</Btn>
-          <Btn onClick={() => setCoModal({ name: '', color: ERP_COLORS[0], phone: '' })} style={{ fontSize: 12, padding: '6px 14px' }}>+ Company</Btn>
+      {/* Header row */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10 }}>
+        <div>
+          <h2 style={{ margin: 0, fontSize: 20, fontWeight: 800, color: t.text }}>🏢 Fleet Organisation</h2>
+          <div style={{ color: t.muted, fontSize: 13, marginTop: 3 }}>
+            {companies.length} compan{companies.length === 1 ? 'y' : 'ies'} · {categories.length} categories
+            {unassignedCount > 0 && <span style={{ color: t.orange, marginLeft: 10, fontWeight: 700 }}>⚠ {unassignedCount} unassigned</span>}
+          </div>
         </div>
-      }>
-        <div style={{ padding: '12px 18px', display: 'flex', gap: 8, borderBottom: `1px solid ${t.border}` }}>
-          {[['board','Board'],['vehicles','Vehicles'],['companies','Companies'],['categories','Categories']].map(([id, lbl]) => (
-            <button key={id} style={tabBtnStyle(id)} onClick={() => setTab(id)}>{lbl}</button>
-          ))}
+        <div style={{ display: 'flex', gap: 8 }}>
+          <Btn onClick={() => setCatModal({ name: '', color: ERP_COLORS[2] })} color={t.green} outline style={{ fontSize: 12, padding: '7px 16px' }}>+ Category</Btn>
+          <Btn onClick={() => setCoModal({ name: '', color: ERP_COLORS[0], phone: '' })} style={{ fontSize: 12, padding: '7px 16px' }}>+ Company</Btn>
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <div style={{ display: 'flex', gap: 6, borderBottom: `1px solid ${t.border}`, paddingBottom: 0 }}>
+        {[['board','🗂 Board'],['vehicles','🚌 Vehicles'],['companies','🏢 Companies'],['categories','🏷 Categories']].map(([id, lbl]) => (
+          <button key={id} onClick={() => setTab(id)} style={{
+            background: 'transparent', border: 'none', borderBottom: `2px solid ${tab === id ? t.accent : 'transparent'}`,
+            padding: '10px 18px', color: tab === id ? t.accent : t.textSoft,
+            cursor: 'pointer', fontSize: 13, fontWeight: tab === id ? 700 : 500,
+            fontFamily: 'inherit', marginBottom: -1, transition: 'all 0.15s',
+          }}>{lbl}</button>
+        ))}
+        {unassignedCount > 0 && (
+          <span style={{ alignSelf: 'center', marginLeft: 8, background: t.orange, color: '#fff', borderRadius: 20, padding: '2px 10px', fontSize: 11, fontWeight: 800 }}>
+            {unassignedCount} unassigned
+          </span>
+        )}
+      </div>
+
+      {/* ── BOARD TAB ── */}
+      {tab === 'board' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+
+          {/* Unassigned strip */}
           {unassignedCount > 0 && (
-            <span style={{ alignSelf: 'center', marginLeft: 4, background: t.orange, color: '#fff', borderRadius: 20, padding: '2px 10px', fontSize: 11, fontWeight: 800 }}>
-              {unassignedCount} unassigned
-            </span>
+            <div style={{
+              background: `linear-gradient(135deg, ${t.orange}12, ${t.orange}06)`,
+              borderRadius: 16, padding: '16px 20px',
+              border: `1px dashed ${t.orange}66`,
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+                <span style={{ fontSize: 18 }}>⚠️</span>
+                <span style={{ color: t.orange, fontWeight: 800, fontSize: 14 }}>Unassigned Vehicles ({unassignedCount})</span>
+                <span style={{ color: t.muted, fontSize: 12, marginLeft: 4 }}>— not linked to any company</span>
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                {(summary?.unassigned || []).map(v => (
+                  <div key={v.devIdno} style={{
+                    display: 'flex', alignItems: 'center', gap: 8,
+                    background: t.panel, borderRadius: 20, padding: '6px 14px',
+                    border: `1px solid ${t.orange}44`, cursor: 'pointer',
+                  }} onClick={() => setAssignModal({ devIdno: v.devIdno, plate: v.plate, companyId: '', categoryId: '' })}>
+                    <span style={{ fontSize: 9, color: v.online ? t.green : t.muted }}>{v.online ? '●' : '○'}</span>
+                    <span style={{ fontSize: 13, fontWeight: 600, color: t.text }}>{v.plate}</span>
+                    <span style={{ fontSize: 11, color: t.accent, fontWeight: 700 }}>Assign →</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Company cards grid */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(420px, 1fr))', gap: 16 }}>
+            {(summary?.companies || []).map(co => {
+              const coOnline  = co.vehicles.filter(v => v.online).length;
+              const coOffline = co.vehicles.length - coOnline;
+              const coAccOn   = co.vehicles.filter(v => v.accOn).length;
+              const isActive  = activeCoid === co.id;
+
+              // Group vehicles by category
+              const groups = {};
+              for (const v of co.vehicles) {
+                const key = v.categoryId || '__none__';
+                if (!groups[key]) groups[key] = [];
+                groups[key].push(v);
+              }
+
+              return (
+                <div key={co.id} style={{
+                  borderRadius: 18, overflow: 'hidden',
+                  border: `1.5px solid ${isActive ? co.color : co.color + '44'}`,
+                  boxShadow: isActive ? `0 4px 24px ${co.color}33` : '0 2px 8px rgba(0,0,0,0.06)',
+                  transition: 'box-shadow 0.2s',
+                }}>
+                  {/* Gradient header */}
+                  <div style={{
+                    background: `linear-gradient(135deg, ${co.color}ee, ${co.color}99)`,
+                    padding: '16px 18px',
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+                      <div style={{ width: 36, height: 36, borderRadius: 10, background: 'rgba(255,255,255,0.25)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, flexShrink: 0 }}>🏢</div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontWeight: 800, fontSize: 15, color: '#fff', letterSpacing: -0.2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{co.name}</div>
+                        {co.phone && <div style={{ color: 'rgba(255,255,255,0.75)', fontSize: 12, marginTop: 2 }}>📞 {co.phone}</div>}
+                      </div>
+                      <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                        <button onClick={() => onCompanySelect && onCompanySelect(isActive ? null : co.id)} style={{
+                          background: isActive ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.2)',
+                          border: 'none', borderRadius: 8, padding: '5px 11px',
+                          color: isActive ? co.color : '#fff', fontSize: 11, cursor: 'pointer', fontFamily: 'inherit', fontWeight: 700,
+                        }}>{isActive ? '✓ Active' : 'Focus'}</button>
+                        <button onClick={() => setCoModal({ id: co.id, name: co.name, color: co.color, phone: co.phone || '' })} style={{
+                          background: 'rgba(255,255,255,0.2)', border: 'none', borderRadius: 8, padding: '5px 11px',
+                          color: '#fff', fontSize: 11, cursor: 'pointer', fontFamily: 'inherit',
+                        }}>Edit</button>
+                      </div>
+                    </div>
+                    {/* Stats row */}
+                    <div style={{ display: 'flex', gap: 16, marginTop: 12, paddingTop: 12, borderTop: '1px solid rgba(255,255,255,0.2)' }}>
+                      {[
+                        { icon: '🚌', val: co.vehicles.length, lbl: 'Total' },
+                        { icon: '🟢', val: coOnline,           lbl: 'Online' },
+                        { icon: '⚫', val: coOffline,          lbl: 'Offline' },
+                        { icon: '🔑', val: coAccOn,            lbl: 'Engine On' },
+                      ].map(({ icon, val, lbl }) => (
+                        <div key={lbl} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                          <span style={{ fontSize: 12 }}>{icon}</span>
+                          <span style={{ color: '#fff', fontWeight: 800, fontSize: 15 }}>{val}</span>
+                          <span style={{ color: 'rgba(255,255,255,0.65)', fontSize: 11 }}>{lbl}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Vehicles body */}
+                  <div style={{ padding: '14px 16px', background: t.panel, display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    {co.vehicles.length === 0 ? (
+                      <div style={{ color: t.muted, fontSize: 13, textAlign: 'center', padding: '12px 0' }}>
+                        No vehicles assigned —
+                        <span style={{ color: t.accent, cursor: 'pointer', marginLeft: 4 }} onClick={() => setTab('vehicles')}>add from Vehicles tab</span>
+                      </div>
+                    ) : Object.entries(groups).map(([catId, vlist]) => {
+                      const cat = catId !== '__none__' ? catMap[catId] : null;
+                      return (
+                        <div key={catId}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+                            {cat && <div style={{ width: 7, height: 7, borderRadius: '50%', background: cat.color }} />}
+                            <span style={{ color: cat ? cat.color : t.muted, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.9 }}>
+                              {cat ? cat.name : 'No Category'}
+                            </span>
+                            <span style={{ color: t.muted, fontSize: 11 }}>({vlist.length})</span>
+                          </div>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                            {vlist.map(v => (
+                              <div key={v.devIdno}
+                                onClick={() => setAssignModal({ devIdno: v.devIdno, plate: v.plate, companyId: v.companyId, categoryId: v.categoryId || '' })}
+                                style={{
+                                  display: 'flex', alignItems: 'center', gap: 6,
+                                  background: v.online ? t.greenSoft : t.bgAlt,
+                                  border: `1px solid ${v.online ? t.green + '55' : t.border}`,
+                                  borderRadius: 20, padding: '5px 12px', cursor: 'pointer',
+                                  transition: 'all 0.15s',
+                                }}>
+                                <span style={{ fontSize: 8, color: v.online ? t.green : t.muted, lineHeight: 1 }}>{v.online ? '●' : '●'}</span>
+                                <span style={{ fontSize: 12, fontWeight: 700, color: v.online ? t.text : t.textSoft }}>{v.plate}</span>
+                                {v.accOn && <span style={{ fontSize: 9, color: t.green, fontWeight: 800 }}>ACC</span>}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {companies.length === 0 && (
+            <div style={{
+              textAlign: 'center', padding: '60px 40px',
+              background: `linear-gradient(135deg, ${t.accentSoft}, ${t.panel})`,
+              borderRadius: 20, border: `1px dashed ${t.border}`,
+            }}>
+              <div style={{ fontSize: 52, marginBottom: 14 }}>🏢</div>
+              <div style={{ fontSize: 16, fontWeight: 800, color: t.text, marginBottom: 6 }}>No companies yet</div>
+              <div style={{ fontSize: 13, color: t.muted, marginBottom: 20 }}>Create your first company to start organising your fleet</div>
+              <Btn onClick={() => setCoModal({ name: '', color: ERP_COLORS[0], phone: '' })}>+ Create First Company</Btn>
+            </div>
           )}
         </div>
+      )}
 
-        {/* ── BOARD TAB ── */}
-        {tab === 'board' && (
-          <div style={{ padding: 18, display: 'flex', flexDirection: 'column', gap: 20 }}>
-
-            {/* Unassigned strip */}
-            {unassignedCount > 0 && (
-              <div style={{ background: t.bgAlt, borderRadius: 14, padding: '14px 18px', border: `1px dashed ${t.border}` }}>
-                <div style={{ color: t.orange, fontWeight: 700, fontSize: 13, marginBottom: 10 }}>⚠ Unassigned Vehicles ({unassignedCount})</div>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                  {(summary?.unassigned || []).map(v => (
-                    <div key={v.devIdno} style={{ display: 'flex', alignItems: 'center', gap: 8, background: t.panel, border: `1px solid ${t.border}`, borderRadius: 10, padding: '6px 12px' }}>
-                      <span style={{ fontSize: 10, color: v.online ? t.green : t.muted }}>{v.online ? '●' : '○'}</span>
-                      <span style={{ fontSize: 13, fontWeight: 600, color: t.text }}>{v.plate}</span>
-                      <button onClick={() => setAssignModal({ devIdno: v.devIdno, plate: v.plate, companyId: '', categoryId: '' })} style={{
-                        background: t.accent, border: 'none', borderRadius: 7, padding: '3px 10px',
-                        color: '#fff', fontSize: 11, cursor: 'pointer', fontFamily: 'inherit', fontWeight: 700,
-                      }}>Assign →</button>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Company boards */}
-            {(summary?.companies || []).map(co => (
-              <div key={co.id} style={{ border: `1.5px solid ${co.color}44`, borderRadius: 16, overflow: 'hidden' }}>
-                {/* Company header */}
-                <div style={{ background: `${co.color}18`, padding: '12px 18px', display: 'flex', alignItems: 'center', gap: 12, borderBottom: `1px solid ${co.color}33` }}>
-                  <div style={{ width: 14, height: 14, borderRadius: '50%', background: co.color, flexShrink: 0 }} />
-                  <span style={{ fontWeight: 800, fontSize: 15, color: t.text, flex: 1 }}>{co.name}</span>
-                  {co.phone && <span style={{ color: t.muted, fontSize: 12 }}>{co.phone}</span>}
-                  <span style={{ color: co.color, fontWeight: 700, fontSize: 12 }}>{co.vehicles.length} vehicle{co.vehicles.length !== 1 ? 's' : ''}</span>
-                  <button onClick={() => setCoModal({ id: co.id, name: co.name, color: co.color, phone: co.phone || '' })}
-                    style={{ background: 'transparent', border: `1px solid ${t.border}`, borderRadius: 7, padding: '3px 10px', color: t.textSoft, fontSize: 11, cursor: 'pointer', fontFamily: 'inherit' }}>Edit</button>
-                </div>
-
-                {/* Vehicles grouped by category */}
-                <div style={{ padding: '14px 18px', display: 'flex', flexDirection: 'column', gap: 12 }}>
-                  {co.vehicles.length === 0
-                    ? <div style={{ color: t.muted, fontSize: 13 }}>No vehicles assigned</div>
-                    : (() => {
-                        // Group by categoryId
-                        const groups = {};
-                        for (const v of co.vehicles) {
-                          const key = v.categoryId || '__none__';
-                          if (!groups[key]) groups[key] = [];
-                          groups[key].push(v);
-                        }
-                        return Object.entries(groups).map(([catId, vlist]) => {
-                          const cat = catId !== '__none__' ? catMap[catId] : null;
-                          return (
-                            <div key={catId}>
-                              <div style={{ color: cat ? cat.color : t.muted, fontWeight: 700, fontSize: 12, marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.8 }}>
-                                {cat ? cat.name : 'No Category'} ({vlist.length})
-                              </div>
-                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                                {vlist.map(v => (
-                                  <div key={v.devIdno} style={{
-                                    display: 'flex', alignItems: 'center', gap: 7,
-                                    background: t.bgAlt, border: `1px solid ${t.border}`,
-                                    borderRadius: 10, padding: '6px 12px', cursor: 'pointer',
-                                  }} onClick={() => setAssignModal({ devIdno: v.devIdno, plate: v.plate, companyId: v.companyId, categoryId: v.categoryId || '' })}>
-                                    <span style={{ fontSize: 10, color: v.online ? t.green : t.muted }}>{v.online ? '●' : '○'}</span>
-                                    <span style={{ fontSize: 13, fontWeight: 600, color: t.text }}>{v.plate}</span>
-                                    {v.accOn && <span style={{ fontSize: 10, color: t.green }}>ACC ON</span>}
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          );
-                        });
-                      })()
-                  }
-                </div>
-              </div>
-            ))}
-
-            {companies.length === 0 && (
-              <div style={{ textAlign: 'center', padding: 40, color: t.muted }}>
-                <div style={{ fontSize: 40, marginBottom: 12 }}>🏢</div>
-                <div style={{ fontSize: 14, fontWeight: 700 }}>No companies yet</div>
-                <div style={{ fontSize: 12, marginTop: 6 }}>Click <b>+ Company</b> to get started</div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* ── VEHICLES TAB ── */}
-        {tab === 'vehicles' && (
+      {/* ── VEHICLES TAB ── */}
+      {tab === 'vehicles' && (
+        <Panel>
           <div style={{ padding: 18 }}>
             {/* Controls row */}
             <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -897,10 +979,12 @@ function FleetERPView({ vehicles }) {
               </table>
             </div>
           </div>
-        )}
+        </Panel>
+      )}
 
-        {/* ── COMPANIES TAB ── */}
-        {tab === 'companies' && (
+      {/* ── COMPANIES TAB ── */}
+      {tab === 'companies' && (
+        <Panel>
           <div style={{ padding: 18 }}>
             {companies.length === 0
               ? <div style={{ textAlign: 'center', padding: 32, color: t.muted }}>No companies yet — click <b>+ Company</b> above</div>
@@ -933,10 +1017,12 @@ function FleetERPView({ vehicles }) {
               )
             }
           </div>
-        )}
+        </Panel>
+      )}
 
-        {/* ── CATEGORIES TAB ── */}
-        {tab === 'categories' && (
+      {/* ── CATEGORIES TAB ── */}
+      {tab === 'categories' && (
+        <Panel>
           <div style={{ padding: 18 }}>
             {categories.length === 0
               ? <div style={{ textAlign: 'center', padding: 32, color: t.muted }}>No categories yet — click <b>+ Category</b> above</div>
@@ -968,8 +1054,8 @@ function FleetERPView({ vehicles }) {
               )
             }
           </div>
-        )}
-      </Panel>
+        </Panel>
+      )}
 
       {/* ── MODALS ── */}
 
@@ -1494,20 +1580,59 @@ function FuelDailyMonthlyView({ vehicles }) {
 
 // ── View: Dashboard ───────────────────────────────────────────────────────────
 
-function DashboardView({ snapshot }) {
+function DashboardView({ snapshot, activeCompany, filteredVehicles = [] }) {
   const { t } = useTheme();
   const { totals = {}, alerts = {}, topSpeeds = [] } = snapshot;
   const speeding = alerts.speeding || [];
   const alarming = alerts.alarming || [];
   const offline  = alerts.offline  || [];
 
+  // When a company is active, derive stats from filteredVehicles
+  const companyOnline  = filteredVehicles.filter(v => (v.online ?? 0) !== 0).length;
+  const companyOffline = filteredVehicles.filter(v => (v.online ?? 0) === 0).length;
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+      {/* Company context banner */}
+      {activeCompany && (
+        <div style={{
+          background: `linear-gradient(135deg, ${activeCompany.color}22, ${activeCompany.color}0a)`,
+          border: `1px solid ${activeCompany.color}44`,
+          borderRadius: 16, padding: "16px 20px",
+          display: "flex", alignItems: "center", gap: 14,
+        }}>
+          <div style={{ width: 16, height: 16, borderRadius: "50%", background: activeCompany.color, boxShadow: `0 0 12px ${activeCompany.color}` }} />
+          <div style={{ flex: 1 }}>
+            <div style={{ fontWeight: 800, fontSize: 16, color: t.text }}>{activeCompany.name}</div>
+            <div style={{ color: t.textSoft, fontSize: 12, marginTop: 2 }}>Showing data for this company only</div>
+          </div>
+          {activeCompany.phone && <div style={{ color: t.muted, fontSize: 13 }}>📞 {activeCompany.phone}</div>}
+          <div style={{ display: "flex", gap: 14 }}>
+            <div style={{ textAlign: "center" }}>
+              <div style={{ color: t.green, fontWeight: 800, fontSize: 20 }}>{companyOnline}</div>
+              <div style={{ color: t.muted, fontSize: 11 }}>Online</div>
+            </div>
+            <div style={{ textAlign: "center" }}>
+              <div style={{ color: t.red, fontWeight: 800, fontSize: 20 }}>{companyOffline}</div>
+              <div style={{ color: t.muted, fontSize: 11 }}>Offline</div>
+            </div>
+            <div style={{ textAlign: "center" }}>
+              <div style={{ color: t.purple, fontWeight: 800, fontSize: 20 }}>{filteredVehicles.length}</div>
+              <div style={{ color: t.muted, fontSize: 11 }}>Total</div>
+            </div>
+          </div>
+        </div>
+      )}
       <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
-        <StatCard label="Total Fleet"  value={totals.vehicles} sub="registered"  color={t.blue}   icon="🚌" />
-        <StatCard label="Online"       value={totals.online}   sub={totals.vehicles ? `${Math.round((totals.online / totals.vehicles) * 100)}% availability` : ""} color={t.green}  icon="🟢" />
+        <StatCard label={activeCompany ? "Company Fleet" : "Total Fleet"}
+          value={activeCompany ? filteredVehicles.length : totals.vehicles} sub="registered"  color={t.blue}   icon="🚌" />
+        <StatCard label="Online"
+          value={activeCompany ? companyOnline : totals.online}
+          sub={filteredVehicles.length ? `${Math.round(((activeCompany ? companyOnline : (totals.online||0)) / (activeCompany ? filteredVehicles.length : (totals.vehicles||1))) * 100)}% availability` : ""}
+          color={t.green}  icon="🟢" />
         <StatCard label="Alarming"     value={totals.alarming} sub="need attention" color={t.red}    icon="🚨" />
-        <StatCard label="Offline"      value={totals.offline}  sub="not reporting"  color={t.muted}  icon="⚫" />
+        <StatCard label="Offline"
+          value={activeCompany ? companyOffline : totals.offline} sub="not reporting"  color={t.muted}  icon="⚫" />
         <StatCard label="Moving"       value={totals.moving}   sub="right now"      color={t.accent} icon="▶" />
       </div>
 
@@ -2748,6 +2873,9 @@ function FleetDashboardContent() {
   const [vehError,     setVehError]     = useState(null);
   const vehiclesFetched = useRef(false);
 
+  const [erpSummary,      setErpSummary]      = useState(null);
+  const [activeCompanyId, setActiveCompanyId] = useState(null);
+
   const [alarms,       setAlarms]       = useState([]);
   const [alarmLoading, setAlarmLoading] = useState(false);
   const [alarmError,   setAlarmError]   = useState(null);
@@ -2844,6 +2972,16 @@ function FleetDashboardContent() {
     finally { setAlarmLoading(false); }
   }, []);
 
+  const fetchErpSummary = useCallback(async () => {
+    try { setErpSummary(await apiFetch('/erp/summary')); } catch (_) {}
+  }, []);
+
+  useEffect(() => {
+    fetchErpSummary();
+    const iv = setInterval(fetchErpSummary, 60000);
+    return () => clearInterval(iv);
+  }, [fetchErpSummary]);
+
   // Always load vehicles on mount — needed for sidebar live cameras
   useEffect(() => { fetchVehicles(); }, [fetchVehicles]);
 
@@ -2853,6 +2991,14 @@ function FleetDashboardContent() {
   }, [view, fetchVehicles, fetchAlarms]);
 
   const totals = snapshot?.totals || {};
+
+  // ERP context — filter vehicles by the active company
+  const activeCompany = erpSummary?.companies?.find(c => c.id === activeCompanyId) ?? null;
+  const filteredVehicles = (activeCompanyId && activeCompany)
+    ? vehicles.filter(v => activeCompany.vehicles.some(sv => sv.devIdno === v.devIdno))
+    : vehicles;
+  const filteredOnline  = filteredVehicles.filter(v => (v.online ?? 0) !== 0).length;
+  const filteredOffline = filteredVehicles.filter(v => (v.online ?? 0) === 0).length;
 
   return (
     <div style={{ minHeight: "100vh", background: t.bg, color: t.text, fontFamily: "'DM Sans', 'Inter', system-ui, sans-serif" }}>
@@ -2881,22 +3027,63 @@ function FleetDashboardContent() {
           </div>
         </div>
 
-        {/* Quick stats strip */}
-        <div style={{ margin: "0 12px 16px", display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6 }}>
-          {[
-            { label: "Online",  value: totals.online  ?? "—", color: t.green  },
-            { label: "Offline", value: totals.offline ?? "—", color: t.red    },
-            { label: "Total",   value: totals.vehicles ?? "—", color: t.purple },
-          ].map(({ label, value, color }) => (
-            <div key={label} style={{
-              background: t.panelBright, borderRadius: 12,
-              padding: "10px 6px", textAlign: "center",
-              border: `1px solid ${t.border}`,
+        {/* ERP Company Switcher */}
+        <div style={{ margin: "0 10px 10px" }}>
+          <div style={{ color: t.muted, fontSize: 10, fontWeight: 700, letterSpacing: 1.4, padding: "0 4px 7px", textTransform: "uppercase" }}>Fleet Context</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 3, maxHeight: 180, overflowY: "auto" }}>
+            {/* All Companies */}
+            <button onClick={() => setActiveCompanyId(null)} style={{
+              display: "flex", alignItems: "center", gap: 8, width: "100%",
+              padding: "8px 10px", borderRadius: 10,
+              background: !activeCompanyId ? t.accentSoft : t.panelBright,
+              border: `1px solid ${!activeCompanyId ? t.accent : t.border}`,
+              cursor: "pointer", fontFamily: "inherit",
+              color: !activeCompanyId ? t.accent : t.textSoft,
+              fontSize: 12, fontWeight: !activeCompanyId ? 700 : 500,
             }}>
-              <div style={{ color, fontSize: 18, fontWeight: 800, lineHeight: 1 }}>{value}</div>
-              <div style={{ color: t.muted, fontSize: 10, fontWeight: 600, marginTop: 3 }}>{label}</div>
-            </div>
-          ))}
+              <span style={{ fontSize: 14 }}>🌐</span>
+              <span style={{ flex: 1, textAlign: "left" }}>All Companies</span>
+              <span style={{ fontSize: 11, fontWeight: 700, color: !activeCompanyId ? t.accent : t.muted }}>{totals.vehicles ?? "—"}</span>
+            </button>
+            {/* Per-company pills */}
+            {(erpSummary?.companies || []).map(co => {
+              const isActive = activeCompanyId === co.id;
+              const coOnline = co.vehicles.filter(v => v.online).length;
+              return (
+                <button key={co.id} onClick={() => setActiveCompanyId(co.id)} style={{
+                  display: "flex", alignItems: "center", gap: 8, width: "100%",
+                  padding: "8px 10px", borderRadius: 10,
+                  background: isActive ? `${co.color}18` : t.panelBright,
+                  border: `1px solid ${isActive ? co.color + "66" : t.border}`,
+                  cursor: "pointer", fontFamily: "inherit",
+                  color: isActive ? t.text : t.textSoft,
+                  fontSize: 12, fontWeight: isActive ? 700 : 500,
+                }}>
+                  <div style={{ width: 9, height: 9, borderRadius: "50%", background: co.color, flexShrink: 0, boxShadow: isActive ? `0 0 6px ${co.color}` : "none" }} />
+                  <span style={{ flex: 1, textAlign: "left", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{co.name}</span>
+                  <span style={{ fontSize: 10, color: t.green, fontWeight: 700 }}>{coOnline}</span>
+                  <span style={{ fontSize: 10, color: t.muted }}>/{co.vehicles.length}</span>
+                </button>
+              );
+            })}
+          </div>
+          {/* Mini stats strip */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 5, marginTop: 8 }}>
+            {[
+              { label: "Online",  value: activeCompanyId ? filteredOnline  : (totals.online  ?? "—"), color: t.green  },
+              { label: "Offline", value: activeCompanyId ? filteredOffline : (totals.offline ?? "—"), color: t.red    },
+              { label: "Total",   value: activeCompanyId ? filteredVehicles.length : (totals.vehicles ?? "—"), color: t.purple },
+            ].map(({ label, value, color }) => (
+              <div key={label} style={{
+                background: t.panelBright, borderRadius: 10,
+                padding: "8px 4px", textAlign: "center",
+                border: `1px solid ${t.border}`,
+              }}>
+                <div style={{ color, fontSize: 16, fontWeight: 800, lineHeight: 1 }}>{value}</div>
+                <div style={{ color: t.muted, fontSize: 10, fontWeight: 600, marginTop: 3 }}>{label}</div>
+              </div>
+            ))}
+          </div>
         </div>
 
         {/* Nav */}
@@ -3013,11 +3200,27 @@ function FleetDashboardContent() {
           marginBottom: 24,
         }}>
           <div>
-            <h1 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: t.text, letterSpacing: -0.5 }}>
-              {NAV.find(n => n.id === view)?.label}
-            </h1>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <h1 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: t.text, letterSpacing: -0.5 }}>
+                {NAV.find(n => n.id === view)?.label}
+              </h1>
+              {activeCompany && (
+                <div style={{ display: "flex", alignItems: "center", gap: 6,
+                  background: `${activeCompany.color}18`, border: `1px solid ${activeCompany.color}55`,
+                  borderRadius: 8, padding: "4px 10px",
+                }}>
+                  <div style={{ width: 8, height: 8, borderRadius: "50%", background: activeCompany.color }} />
+                  <span style={{ fontSize: 12, fontWeight: 700, color: activeCompany.color }}>{activeCompany.name}</span>
+                  <button onClick={() => setActiveCompanyId(null)} style={{
+                    background: "transparent", border: "none", color: t.muted, cursor: "pointer",
+                    fontSize: 13, lineHeight: 1, padding: 0, marginLeft: 2, fontFamily: "inherit",
+                  }}>×</button>
+                </div>
+              )}
+            </div>
             <div style={{ color: t.muted, fontSize: 13, marginTop: 2, fontWeight: 400 }}>
               {new Date().toLocaleDateString("en-TZ", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}
+              {activeCompany && <span style={{ marginLeft: 10, color: t.green, fontWeight: 600 }}>{filteredVehicles.length} vehicles</span>}
             </div>
           </div>
           <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
@@ -3066,10 +3269,10 @@ function FleetDashboardContent() {
           {view === "dashboard" && (
             snapLoading ? <Spinner label="Fetching live fleet data…" /> :
             snapError   ? <ErrorBanner message={snapError} onRetry={fetchSnapshot} /> :
-            snapshot    ? <DashboardView snapshot={snapshot} /> : null
+            snapshot    ? <DashboardView snapshot={snapshot} activeCompany={activeCompany} filteredVehicles={filteredVehicles} /> : null
           )}
           {view === "vehicles" && (
-            <VehiclesView vehicles={vehicles} loading={vehLoading} error={vehError}
+            <VehiclesView vehicles={filteredVehicles} loading={vehLoading} error={vehError}
               onRetry={() => { vehiclesFetched.current = false; fetchVehicles(); }}
               onSelect={setSelectedVehicle} />
           )}
@@ -3077,10 +3280,10 @@ function FleetDashboardContent() {
             <AlarmsView alarms={alarms} loading={alarmLoading} error={alarmError}
               onRetry={() => { alarmsFetched.current = false; fetchAlarms(); }} />
           )}
-          {view === "erp"         && <FleetERPView vehicles={vehicles} />}
+          {view === "erp"         && <FleetERPView vehicles={filteredVehicles} onCompanySelect={setActiveCompanyId} activeCompanyId={activeCompanyId} />}
           {view === "notifs"      && <NotificationsView events={accEvents} onClear={clearNotifications} />}
-          {view === "fuel"        && <FuelConsumptionView vehicles={vehicles} />}
-          {view === "fuelrpt"     && <FuelDailyMonthlyView vehicles={vehicles} />}
+          {view === "fuel"        && <FuelConsumptionView vehicles={filteredVehicles} />}
+          {view === "fuelrpt"     && <FuelDailyMonthlyView vehicles={filteredVehicles} />}
           {view === "chat"        && <ChatView />}
         </div>
       </div>
