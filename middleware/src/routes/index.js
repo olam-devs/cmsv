@@ -15,6 +15,7 @@ const router  = express.Router();
 const cms     = require('../services/cmsv6.service');
 const hourlyReport = require('../services/hourly-report.service');
 const { getLastNonZeroFuel } = require('../services/monitor.service');
+const erp     = require('../services/fleet-erp.service');
 const logger  = require('../utils/logger');
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -1101,6 +1102,135 @@ router.get('/debug/alarm-types', async (req, res) => {
 router.get('/debug/raw-status', async (req, res) => {
   const data = await cms.getRawStatus();
   ok(res, data);
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+//  FLEET ERP — Companies / Categories / Assignments
+// ══════════════════════════════════════════════════════════════════════════
+
+// ── Companies ─────────────────────────────────────────────────────────────
+
+router.get('/erp/companies', (req, res) => {
+  const counts = erp.vehicleCountByCompany();
+  ok(res, erp.listCompanies().map(c => ({ ...c, vehicleCount: counts[c.id] || 0 })));
+});
+
+router.post('/erp/companies', (req, res) => {
+  const { name, color, phone } = req.body;
+  if (!name) return err(res, 'name is required');
+  ok(res, erp.createCompany({ name, color, phone }));
+});
+
+router.put('/erp/companies/:id', (req, res) => {
+  try { ok(res, erp.updateCompany(req.params.id, req.body)); }
+  catch (e) { err(res, e.message, 404); }
+});
+
+router.delete('/erp/companies/:id', (req, res) => {
+  const unassigned = erp.deleteCompany(req.params.id);
+  ok(res, { deleted: true, vehiclesUnassigned: unassigned });
+});
+
+// ── Categories ────────────────────────────────────────────────────────────
+
+router.get('/erp/categories', (req, res) => {
+  const counts = erp.vehicleCountByCategory();
+  ok(res, erp.listCategories().map(c => ({ ...c, vehicleCount: counts[c.id] || 0 })));
+});
+
+router.post('/erp/categories', (req, res) => {
+  const { name, color } = req.body;
+  if (!name) return err(res, 'name is required');
+  ok(res, erp.createCategory({ name, color }));
+});
+
+router.put('/erp/categories/:id', (req, res) => {
+  try { ok(res, erp.updateCategory(req.params.id, req.body)); }
+  catch (e) { err(res, e.message, 404); }
+});
+
+router.delete('/erp/categories/:id', (req, res) => {
+  erp.deleteCategory(req.params.id);
+  ok(res, { deleted: true });
+});
+
+// ── Assignments ───────────────────────────────────────────────────────────
+
+/** GET /api/erp/assignments — all assignments enriched with vehicle info */
+router.get('/erp/assignments', async (req, res) => {
+  const vehicles = await cms.getVehicles().catch(() => []);
+  const vehMap   = {};
+  for (const v of vehicles) vehMap[v.devIdno] = v;
+  const raw = erp.listAssignments();
+  const list = Object.entries(raw).map(([devIdno, a]) => {
+    const v = vehMap[devIdno];
+    return { devIdno, ...a, plate: v?.plate || v?.nm || devIdno, online: null, stale: !v };
+  });
+  ok(res, list);
+});
+
+/** GET /api/erp/assignments/unassigned — vehicles not yet assigned */
+router.get('/erp/assignments/unassigned', async (req, res) => {
+  const vehicles = await cms.getVehicles();
+  const unassignedIds = erp.getUnassigned(vehicles.map(v => v.devIdno));
+  const list = vehicles.filter(v => unassignedIds.includes(v.devIdno));
+  ok(res, list, { count: list.length });
+});
+
+/** POST /api/erp/assignments — assign or move one vehicle */
+router.post('/erp/assignments', (req, res) => {
+  const { devIdno, companyId, categoryId } = req.body;
+  if (!devIdno || !companyId) return err(res, 'devIdno and companyId are required');
+  ok(res, erp.assign(devIdno, companyId, categoryId));
+});
+
+/** POST /api/erp/assignments/bulk — assign multiple vehicles at once */
+router.post('/erp/assignments/bulk', (req, res) => {
+  const { devIdnos, companyId, categoryId } = req.body;
+  if (!Array.isArray(devIdnos) || !companyId) return err(res, 'devIdnos[] and companyId are required');
+  erp.bulkAssign(devIdnos, companyId, categoryId);
+  ok(res, { assigned: devIdnos.length });
+});
+
+/** DELETE /api/erp/assignments/:devIdno — unassign a vehicle */
+router.delete('/erp/assignments/:devIdno', (req, res) => {
+  erp.unassign(req.params.devIdno);
+  ok(res, { unassigned: true });
+});
+
+/** GET /api/erp/summary — enriched overview for the board view */
+router.get('/erp/summary', async (req, res) => {
+  const vehicles  = await cms.getVehicles().catch(() => []);
+  const statuses  = await cms.getAllGPS().catch(() => []);
+  const statusMap = {};
+  for (const s of statuses) if (s.devIdno || s.id) statusMap[s.devIdno || s.id] = s;
+
+  const assignments = erp.listAssignments();
+  const companies   = erp.listCompanies();
+  const categories  = erp.listCategories();
+
+  // Enrich vehicles with live status
+  const enriched = vehicles.map(v => {
+    const s = statusMap[v.devIdno] || {};
+    const a = assignments[v.devIdno] || null;
+    return {
+      devIdno:    v.devIdno,
+      plate:      v.plate || v.nm || v.devIdno,
+      online:     (s.ol ?? 0) !== 0,
+      accOn:      s.accOn ?? false,
+      companyId:  a?.companyId  || null,
+      categoryId: a?.categoryId || null,
+    };
+  });
+
+  const unassigned = enriched.filter(v => !v.companyId);
+
+  const companyData = companies.map(co => ({
+    ...co,
+    vehicles: enriched.filter(v => v.companyId === co.id),
+  }));
+
+  ok(res, { companies: companyData, categories, unassigned });
 });
 
 module.exports = router;

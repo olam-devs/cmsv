@@ -550,8 +550,569 @@ function totalConsumption(data) {
   return Math.round(used * 10) / 10;
 }
 
-// ── (calibration removed — handled natively in CMSV6) ─────────────────────────
+// ── View: Fleet ERP (Companies / Categories / Vehicle Assignment) ─────────────
 
+const ERP_COLORS = ['#4318d1','#7551ff','#05cd99','#39b8ff','#ff9500','#ee5d50','#868cff','#21d4fd'];
+
+function ColorPicker({ value, onChange }) {
+  const { t } = useTheme();
+  return (
+    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+      {ERP_COLORS.map(c => (
+        <button key={c} onClick={() => onChange(c)} style={{
+          width: 26, height: 26, borderRadius: '50%', background: c, border: 'none',
+          cursor: 'pointer', outline: value === c ? `3px solid ${t.text}` : '3px solid transparent',
+          outlineOffset: 2, transition: 'outline 0.1s',
+        }} />
+      ))}
+    </div>
+  );
+}
+
+function Badge({ label, color }) {
+  return (
+    <span style={{
+      display: 'inline-block', padding: '2px 10px', borderRadius: 20,
+      background: color + '28', color, fontWeight: 700, fontSize: 11,
+      border: `1px solid ${color}55`,
+    }}>{label}</span>
+  );
+}
+
+function ErpModal({ title, onClose, children }) {
+  const { t } = useTheme();
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 8000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+      onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div style={{ background: t.panel, borderRadius: 18, width: 440, maxWidth: '95vw', boxShadow: '0 16px 60px rgba(0,0,0,0.4)', overflow: 'hidden' }}>
+        <div style={{ display: 'flex', alignItems: 'center', padding: '16px 20px', background: t.panelBright, borderBottom: `1px solid ${t.border}` }}>
+          <div style={{ flex: 1, fontWeight: 800, fontSize: 16, color: t.text }}>{title}</div>
+          <button onClick={onClose} style={{ background: 'transparent', border: 'none', color: t.muted, cursor: 'pointer', fontSize: 22, lineHeight: 1 }}>×</button>
+        </div>
+        <div style={{ padding: 20 }}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function FleetERPView({ vehicles }) {
+  const { t } = useTheme();
+  const [tab,       setTab]       = useState('board');
+  const [summary,   setSummary]   = useState(null);   // { companies, categories, unassigned }
+  const [companies, setCompanies] = useState([]);
+  const [categories,setCategories]= useState([]);
+  const [loading,   setLoading]   = useState(true);
+  const [error,     setError]     = useState(null);
+
+  // Modals
+  const [coModal,     setCoModal]     = useState(null); // null | { id?, name, color, phone }
+  const [catModal,    setCatModal]    = useState(null); // null | { id?, name, color }
+  const [assignModal, setAssignModal] = useState(null); // null | { devIdno, plate, companyId, categoryId }
+  const [deleteConfirm, setDeleteConfirm] = useState(null); // null | { type, id, name, vehicleCount }
+  const [bulkSel,     setBulkSel]     = useState([]);   // devIdnos selected for bulk assign
+  const [bulkModal,   setBulkModal]   = useState(false);
+  const [vehFilter,   setVehFilter]   = useState('all'); // 'all'|'assigned'|'unassigned'
+  const [search,      setSearch]      = useState('');
+
+  const reload = async () => {
+    setLoading(true); setError(null);
+    try {
+      const [sum, cos, cats] = await Promise.all([
+        apiFetch('/erp/summary'),
+        apiFetch('/erp/companies'),
+        apiFetch('/erp/categories'),
+      ]);
+      setSummary(sum); setCompanies(cos); setCategories(cats);
+    } catch (e) { setError(e.message); }
+    setLoading(false);
+  };
+
+  useEffect(() => { reload(); }, []);
+
+  // ── Company CRUD ──────────────────────────────────────────────────────────
+
+  const saveCompany = async () => {
+    const { id, name, color, phone } = coModal;
+    if (!name.trim()) return;
+    try {
+      if (id) await apiFetch(`/erp/companies/${id}`, { method: 'PUT', body: JSON.stringify({ name, color, phone }) });
+      else    await apiFetch('/erp/companies',        { method: 'POST', body: JSON.stringify({ name, color, phone }) });
+      setCoModal(null); reload();
+    } catch (e) { alert(e.message); }
+  };
+
+  const deleteCompany = async (id) => {
+    try {
+      const r = await apiFetch(`/erp/companies/${id}`, { method: 'DELETE' });
+      if (r.vehiclesUnassigned > 0) alert(`${r.vehiclesUnassigned} vehicle(s) have been unassigned.`);
+      setDeleteConfirm(null); reload();
+    } catch (e) { alert(e.message); }
+  };
+
+  // ── Category CRUD ─────────────────────────────────────────────────────────
+
+  const saveCategory = async () => {
+    const { id, name, color } = catModal;
+    if (!name.trim()) return;
+    try {
+      if (id) await apiFetch(`/erp/categories/${id}`, { method: 'PUT', body: JSON.stringify({ name, color }) });
+      else    await apiFetch('/erp/categories',        { method: 'POST', body: JSON.stringify({ name, color }) });
+      setCatModal(null); reload();
+    } catch (e) { alert(e.message); }
+  };
+
+  const deleteCategory = async (id) => {
+    try { await apiFetch(`/erp/categories/${id}`, { method: 'DELETE' }); setDeleteConfirm(null); reload(); }
+    catch (e) { alert(e.message); }
+  };
+
+  // ── Assignments ───────────────────────────────────────────────────────────
+
+  const saveAssign = async (devIdno, companyId, categoryId) => {
+    try {
+      await apiFetch('/erp/assignments', { method: 'POST', body: JSON.stringify({ devIdno, companyId, categoryId }) });
+      setAssignModal(null); reload();
+    } catch (e) { alert(e.message); }
+  };
+
+  const unassign = async (devIdno) => {
+    try { await apiFetch(`/erp/assignments/${devIdno}`, { method: 'DELETE' }); setAssignModal(null); reload(); }
+    catch (e) { alert(e.message); }
+  };
+
+  const saveBulkAssign = async (companyId, categoryId) => {
+    try {
+      await apiFetch('/erp/assignments/bulk', { method: 'POST', body: JSON.stringify({ devIdnos: bulkSel, companyId, categoryId }) });
+      setBulkModal(false); setBulkSel([]); reload();
+    } catch (e) { alert(e.message); }
+  };
+
+  // ── Derived data ──────────────────────────────────────────────────────────
+
+  const catMap = Object.fromEntries((categories || []).map(c => [c.id, c]));
+  const coMap  = Object.fromEntries((companies  || []).map(c => [c.id, c]));
+
+  // Enrich vehicles list with assignment info
+  const vehiclesEnriched = vehicles.map(v => {
+    const a = summary ? (summary.companies.flatMap(c => c.vehicles).find(sv => sv.devIdno === v.devIdno) || null) : null;
+    return {
+      ...v,
+      companyId:  a?.companyId  || null,
+      categoryId: a?.categoryId || null,
+      plate: v.plate || v.nm || v.devIdno,
+    };
+  });
+
+  const filteredVehicles = vehiclesEnriched.filter(v => {
+    if (vehFilter === 'assigned'   && !v.companyId) return false;
+    if (vehFilter === 'unassigned' && v.companyId)  return false;
+    if (search && !v.plate.toLowerCase().includes(search.toLowerCase())) return false;
+    return true;
+  });
+
+  // ── Shared style helpers ──────────────────────────────────────────────────
+
+  const tabBtnStyle = (id) => ({
+    background: tab === id ? t.accent : 'transparent',
+    border: `1px solid ${tab === id ? t.accent : t.border}`,
+    borderRadius: 10, padding: '8px 18px', color: tab === id ? '#fff' : t.textSoft,
+    cursor: 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit',
+  });
+
+  if (loading) return <Spinner label="Loading fleet organisation…" />;
+  if (error)   return <div style={{ padding: 24 }}><ErrorBanner message={error} onRetry={reload} /></div>;
+
+  const unassignedCount = summary?.unassigned?.length ?? 0;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+
+      {/* Header + tabs */}
+      <Panel title="🏢 Fleet Organisation — ERP" action={
+        <div style={{ display: 'flex', gap: 8 }}>
+          <Btn onClick={() => setCatModal({ name: '', color: ERP_COLORS[2] })} color={t.green} outline style={{ fontSize: 12, padding: '6px 14px' }}>+ Category</Btn>
+          <Btn onClick={() => setCoModal({ name: '', color: ERP_COLORS[0], phone: '' })} style={{ fontSize: 12, padding: '6px 14px' }}>+ Company</Btn>
+        </div>
+      }>
+        <div style={{ padding: '12px 18px', display: 'flex', gap: 8, borderBottom: `1px solid ${t.border}` }}>
+          {[['board','Board'],['vehicles','Vehicles'],['companies','Companies'],['categories','Categories']].map(([id, lbl]) => (
+            <button key={id} style={tabBtnStyle(id)} onClick={() => setTab(id)}>{lbl}</button>
+          ))}
+          {unassignedCount > 0 && (
+            <span style={{ alignSelf: 'center', marginLeft: 4, background: t.orange, color: '#fff', borderRadius: 20, padding: '2px 10px', fontSize: 11, fontWeight: 800 }}>
+              {unassignedCount} unassigned
+            </span>
+          )}
+        </div>
+
+        {/* ── BOARD TAB ── */}
+        {tab === 'board' && (
+          <div style={{ padding: 18, display: 'flex', flexDirection: 'column', gap: 20 }}>
+
+            {/* Unassigned strip */}
+            {unassignedCount > 0 && (
+              <div style={{ background: t.bgAlt, borderRadius: 14, padding: '14px 18px', border: `1px dashed ${t.border}` }}>
+                <div style={{ color: t.orange, fontWeight: 700, fontSize: 13, marginBottom: 10 }}>⚠ Unassigned Vehicles ({unassignedCount})</div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                  {(summary?.unassigned || []).map(v => (
+                    <div key={v.devIdno} style={{ display: 'flex', alignItems: 'center', gap: 8, background: t.panel, border: `1px solid ${t.border}`, borderRadius: 10, padding: '6px 12px' }}>
+                      <span style={{ fontSize: 10, color: v.online ? t.green : t.muted }}>{v.online ? '●' : '○'}</span>
+                      <span style={{ fontSize: 13, fontWeight: 600, color: t.text }}>{v.plate}</span>
+                      <button onClick={() => setAssignModal({ devIdno: v.devIdno, plate: v.plate, companyId: '', categoryId: '' })} style={{
+                        background: t.accent, border: 'none', borderRadius: 7, padding: '3px 10px',
+                        color: '#fff', fontSize: 11, cursor: 'pointer', fontFamily: 'inherit', fontWeight: 700,
+                      }}>Assign →</button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Company boards */}
+            {(summary?.companies || []).map(co => (
+              <div key={co.id} style={{ border: `1.5px solid ${co.color}44`, borderRadius: 16, overflow: 'hidden' }}>
+                {/* Company header */}
+                <div style={{ background: `${co.color}18`, padding: '12px 18px', display: 'flex', alignItems: 'center', gap: 12, borderBottom: `1px solid ${co.color}33` }}>
+                  <div style={{ width: 14, height: 14, borderRadius: '50%', background: co.color, flexShrink: 0 }} />
+                  <span style={{ fontWeight: 800, fontSize: 15, color: t.text, flex: 1 }}>{co.name}</span>
+                  {co.phone && <span style={{ color: t.muted, fontSize: 12 }}>{co.phone}</span>}
+                  <span style={{ color: co.color, fontWeight: 700, fontSize: 12 }}>{co.vehicles.length} vehicle{co.vehicles.length !== 1 ? 's' : ''}</span>
+                  <button onClick={() => setCoModal({ id: co.id, name: co.name, color: co.color, phone: co.phone || '' })}
+                    style={{ background: 'transparent', border: `1px solid ${t.border}`, borderRadius: 7, padding: '3px 10px', color: t.textSoft, fontSize: 11, cursor: 'pointer', fontFamily: 'inherit' }}>Edit</button>
+                </div>
+
+                {/* Vehicles grouped by category */}
+                <div style={{ padding: '14px 18px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  {co.vehicles.length === 0
+                    ? <div style={{ color: t.muted, fontSize: 13 }}>No vehicles assigned</div>
+                    : (() => {
+                        // Group by categoryId
+                        const groups = {};
+                        for (const v of co.vehicles) {
+                          const key = v.categoryId || '__none__';
+                          if (!groups[key]) groups[key] = [];
+                          groups[key].push(v);
+                        }
+                        return Object.entries(groups).map(([catId, vlist]) => {
+                          const cat = catId !== '__none__' ? catMap[catId] : null;
+                          return (
+                            <div key={catId}>
+                              <div style={{ color: cat ? cat.color : t.muted, fontWeight: 700, fontSize: 12, marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.8 }}>
+                                {cat ? cat.name : 'No Category'} ({vlist.length})
+                              </div>
+                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                                {vlist.map(v => (
+                                  <div key={v.devIdno} style={{
+                                    display: 'flex', alignItems: 'center', gap: 7,
+                                    background: t.bgAlt, border: `1px solid ${t.border}`,
+                                    borderRadius: 10, padding: '6px 12px', cursor: 'pointer',
+                                  }} onClick={() => setAssignModal({ devIdno: v.devIdno, plate: v.plate, companyId: v.companyId, categoryId: v.categoryId || '' })}>
+                                    <span style={{ fontSize: 10, color: v.online ? t.green : t.muted }}>{v.online ? '●' : '○'}</span>
+                                    <span style={{ fontSize: 13, fontWeight: 600, color: t.text }}>{v.plate}</span>
+                                    {v.accOn && <span style={{ fontSize: 10, color: t.green }}>ACC ON</span>}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          );
+                        });
+                      })()
+                  }
+                </div>
+              </div>
+            ))}
+
+            {companies.length === 0 && (
+              <div style={{ textAlign: 'center', padding: 40, color: t.muted }}>
+                <div style={{ fontSize: 40, marginBottom: 12 }}>🏢</div>
+                <div style={{ fontSize: 14, fontWeight: 700 }}>No companies yet</div>
+                <div style={{ fontSize: 12, marginTop: 6 }}>Click <b>+ Company</b> to get started</div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── VEHICLES TAB ── */}
+        {tab === 'vehicles' && (
+          <div style={{ padding: 18 }}>
+            {/* Controls row */}
+            <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
+              <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search plate…"
+                style={{ background: t.bgAlt, border: `1px solid ${t.border}`, borderRadius: 8, padding: '8px 14px', color: t.text, fontSize: 13, fontFamily: 'inherit', outline: 'none', minWidth: 180 }} />
+              {[['all','All'],['assigned','Assigned'],['unassigned','Unassigned']].map(([val,lbl]) => (
+                <button key={val} onClick={() => setVehFilter(val)} style={{
+                  background: vehFilter === val ? t.accentSoft : 'transparent',
+                  border: `1px solid ${vehFilter === val ? t.accent : t.border}`,
+                  borderRadius: 8, padding: '7px 14px', color: vehFilter === val ? t.accent : t.textSoft,
+                  cursor: 'pointer', fontSize: 12, fontWeight: 700, fontFamily: 'inherit',
+                }}>{lbl}</button>
+              ))}
+              <div style={{ flex: 1 }} />
+              {bulkSel.length > 0 && (
+                <Btn onClick={() => setBulkModal(true)} color={t.green}>Assign {bulkSel.length} selected →</Btn>
+              )}
+            </div>
+
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                <thead>
+                  <tr style={{ background: t.bgAlt }}>
+                    <th style={{ padding: '10px 12px', textAlign: 'left', color: t.muted, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.8, borderBottom: `1px solid ${t.border}`, width: 36 }}>
+                      <input type="checkbox"
+                        checked={bulkSel.length === filteredVehicles.length && filteredVehicles.length > 0}
+                        onChange={e => setBulkSel(e.target.checked ? filteredVehicles.map(v => v.devIdno) : [])}
+                      />
+                    </th>
+                    {['Vehicle','Status','Company','Category',''].map(h => (
+                      <th key={h} style={{ padding: '10px 14px', textAlign: 'left', color: t.muted, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.8, borderBottom: `1px solid ${t.border}`, whiteSpace: 'nowrap' }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredVehicles.map((v, i) => {
+                    const co  = v.companyId  ? coMap[v.companyId]   : null;
+                    const cat = v.categoryId ? catMap[v.categoryId] : null;
+                    return (
+                      <tr key={v.devIdno} style={{ background: i % 2 ? t.bgAlt + '55' : 'transparent', borderBottom: `1px solid ${t.border}55` }}>
+                        <td style={{ padding: '10px 12px' }}>
+                          <input type="checkbox" checked={bulkSel.includes(v.devIdno)}
+                            onChange={e => setBulkSel(p => e.target.checked ? [...p, v.devIdno] : p.filter(x => x !== v.devIdno))} />
+                        </td>
+                        <td style={{ padding: '10px 14px', fontWeight: 700, color: t.text }}>{v.plate}</td>
+                        <td style={{ padding: '10px 14px' }}>
+                          <span style={{ color: v.online ? t.green : t.muted, fontWeight: 700, fontSize: 12 }}>{v.online ? '● Online' : '○ Offline'}</span>
+                        </td>
+                        <td style={{ padding: '10px 14px' }}>
+                          {co ? <Badge label={co.name} color={co.color} /> : <span style={{ color: t.muted, fontSize: 12 }}>—</span>}
+                        </td>
+                        <td style={{ padding: '10px 14px' }}>
+                          {cat ? <Badge label={cat.name} color={cat.color} /> : <span style={{ color: t.muted, fontSize: 12 }}>—</span>}
+                        </td>
+                        <td style={{ padding: '10px 14px', textAlign: 'right' }}>
+                          <button onClick={() => setAssignModal({ devIdno: v.devIdno, plate: v.plate, companyId: v.companyId || '', categoryId: v.categoryId || '' })}
+                            style={{ background: v.companyId ? 'transparent' : t.accent, border: `1px solid ${v.companyId ? t.border : t.accent}`, borderRadius: 8, padding: '5px 14px', color: v.companyId ? t.textSoft : '#fff', cursor: 'pointer', fontSize: 12, fontFamily: 'inherit', fontWeight: 600 }}>
+                            {v.companyId ? 'Move' : 'Assign'}
+                          </button>
+                          {v.companyId && (
+                            <button onClick={() => unassign(v.devIdno)} style={{ background: 'transparent', border: 'none', color: t.red, cursor: 'pointer', fontSize: 12, marginLeft: 6, fontFamily: 'inherit' }}>Remove</button>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {filteredVehicles.length === 0 && (
+                    <tr><td colSpan={6} style={{ padding: 32, textAlign: 'center', color: t.muted }}>No vehicles match filter</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* ── COMPANIES TAB ── */}
+        {tab === 'companies' && (
+          <div style={{ padding: 18 }}>
+            {companies.length === 0
+              ? <div style={{ textAlign: 'center', padding: 32, color: t.muted }}>No companies yet — click <b>+ Company</b> above</div>
+              : (
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                  <thead>
+                    <tr style={{ background: t.bgAlt }}>
+                      {['Color','Name','Phone','Vehicles',''].map(h => (
+                        <th key={h} style={{ padding: '10px 14px', textAlign: 'left', color: t.muted, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.8, borderBottom: `1px solid ${t.border}` }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {companies.map((co, i) => (
+                      <tr key={co.id} style={{ background: i % 2 ? t.bgAlt + '55' : 'transparent', borderBottom: `1px solid ${t.border}55` }}>
+                        <td style={{ padding: '10px 14px' }}><div style={{ width: 18, height: 18, borderRadius: '50%', background: co.color }} /></td>
+                        <td style={{ padding: '10px 14px', fontWeight: 700, color: t.text }}>{co.name}</td>
+                        <td style={{ padding: '10px 14px', color: t.textSoft }}>{co.phone || '—'}</td>
+                        <td style={{ padding: '10px 14px', color: t.accent, fontWeight: 700 }}>{co.vehicleCount}</td>
+                        <td style={{ padding: '10px 14px', textAlign: 'right', display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                          <button onClick={() => setCoModal({ id: co.id, name: co.name, color: co.color, phone: co.phone || '' })}
+                            style={{ background: 'transparent', border: `1px solid ${t.border}`, borderRadius: 8, padding: '5px 14px', color: t.textSoft, cursor: 'pointer', fontSize: 12, fontFamily: 'inherit' }}>Edit</button>
+                          <button onClick={() => setDeleteConfirm({ type: 'company', id: co.id, name: co.name, vehicleCount: co.vehicleCount })}
+                            style={{ background: 'transparent', border: `1px solid ${t.red}55`, borderRadius: 8, padding: '5px 14px', color: t.red, cursor: 'pointer', fontSize: 12, fontFamily: 'inherit' }}>Delete</button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )
+            }
+          </div>
+        )}
+
+        {/* ── CATEGORIES TAB ── */}
+        {tab === 'categories' && (
+          <div style={{ padding: 18 }}>
+            {categories.length === 0
+              ? <div style={{ textAlign: 'center', padding: 32, color: t.muted }}>No categories yet — click <b>+ Category</b> above</div>
+              : (
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                  <thead>
+                    <tr style={{ background: t.bgAlt }}>
+                      {['Color','Name','Vehicles Assigned',''].map(h => (
+                        <th key={h} style={{ padding: '10px 14px', textAlign: 'left', color: t.muted, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.8, borderBottom: `1px solid ${t.border}` }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {categories.map((cat, i) => (
+                      <tr key={cat.id} style={{ background: i % 2 ? t.bgAlt + '55' : 'transparent', borderBottom: `1px solid ${t.border}55` }}>
+                        <td style={{ padding: '10px 14px' }}><div style={{ width: 18, height: 18, borderRadius: '50%', background: cat.color }} /></td>
+                        <td style={{ padding: '10px 14px', fontWeight: 700, color: t.text }}>{cat.name}</td>
+                        <td style={{ padding: '10px 14px', color: t.accent, fontWeight: 700 }}>{cat.vehicleCount}</td>
+                        <td style={{ padding: '10px 14px', textAlign: 'right', display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                          <button onClick={() => setCatModal({ id: cat.id, name: cat.name, color: cat.color })}
+                            style={{ background: 'transparent', border: `1px solid ${t.border}`, borderRadius: 8, padding: '5px 14px', color: t.textSoft, cursor: 'pointer', fontSize: 12, fontFamily: 'inherit' }}>Edit</button>
+                          <button onClick={() => setDeleteConfirm({ type: 'category', id: cat.id, name: cat.name, vehicleCount: cat.vehicleCount })}
+                            style={{ background: 'transparent', border: `1px solid ${t.red}55`, borderRadius: 8, padding: '5px 14px', color: t.red, cursor: 'pointer', fontSize: 12, fontFamily: 'inherit' }}>Delete</button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )
+            }
+          </div>
+        )}
+      </Panel>
+
+      {/* ── MODALS ── */}
+
+      {/* Company form */}
+      {coModal && (
+        <ErpModal title={coModal.id ? 'Edit Company' : 'New Company'} onClose={() => setCoModal(null)}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <Inp label="Company Name *" value={coModal.name} onChange={e => setCoModal(p => ({ ...p, name: e.target.value }))} placeholder="e.g. Star Link Express" />
+            <Inp label="Phone" value={coModal.phone} onChange={e => setCoModal(p => ({ ...p, phone: e.target.value }))} placeholder="255712345678" />
+            <div>
+              <div style={{ color: t.muted, fontSize: 11, fontWeight: 700, marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.8 }}>Colour</div>
+              <ColorPicker value={coModal.color} onChange={c => setCoModal(p => ({ ...p, color: c }))} />
+            </div>
+            <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
+              <Btn onClick={saveCompany} disabled={!coModal.name.trim()}>{coModal.id ? 'Save Changes' : 'Create Company'}</Btn>
+              <Btn onClick={() => setCoModal(null)} outline color={t.muted}>Cancel</Btn>
+            </div>
+          </div>
+        </ErpModal>
+      )}
+
+      {/* Category form */}
+      {catModal && (
+        <ErpModal title={catModal.id ? 'Edit Category' : 'New Category'} onClose={() => setCatModal(null)}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <Inp label="Category Name *" value={catModal.name} onChange={e => setCatModal(p => ({ ...p, name: e.target.value }))} placeholder="e.g. School Buses" />
+            <div>
+              <div style={{ color: t.muted, fontSize: 11, fontWeight: 700, marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.8 }}>Colour</div>
+              <ColorPicker value={catModal.color} onChange={c => setCatModal(p => ({ ...p, color: c }))} />
+            </div>
+            <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
+              <Btn onClick={saveCategory} disabled={!catModal.name.trim()} color={t.green}>{catModal.id ? 'Save Changes' : 'Create Category'}</Btn>
+              <Btn onClick={() => setCatModal(null)} outline color={t.muted}>Cancel</Btn>
+            </div>
+          </div>
+        </ErpModal>
+      )}
+
+      {/* Assign / Move vehicle modal */}
+      {assignModal && (
+        <AssignVehicleModal
+          plate={assignModal.plate}
+          devIdno={assignModal.devIdno}
+          currentCompanyId={assignModal.companyId}
+          currentCategoryId={assignModal.categoryId}
+          companies={companies}
+          categories={categories}
+          onSave={saveAssign}
+          onUnassign={unassign}
+          onClose={() => setAssignModal(null)}
+        />
+      )}
+
+      {/* Bulk assign modal */}
+      {bulkModal && (
+        <BulkAssignModal
+          count={bulkSel.length}
+          companies={companies}
+          categories={categories}
+          onSave={saveBulkAssign}
+          onClose={() => setBulkModal(false)}
+        />
+      )}
+
+      {/* Delete confirmation */}
+      {deleteConfirm && (
+        <ErpModal title={`Delete ${deleteConfirm.type === 'company' ? 'Company' : 'Category'}`} onClose={() => setDeleteConfirm(null)}>
+          <div style={{ color: t.textSoft, fontSize: 14, lineHeight: 1.7, marginBottom: 20 }}>
+            {deleteConfirm.type === 'company'
+              ? <>Delete <b>{deleteConfirm.name}</b>? {deleteConfirm.vehicleCount > 0 && <span style={{ color: t.orange }}>{deleteConfirm.vehicleCount} vehicle(s) will become unassigned.</span>}</>
+              : <>Delete category <b>{deleteConfirm.name}</b>? {deleteConfirm.vehicleCount > 0 && <span style={{ color: t.orange }}>{deleteConfirm.vehicleCount} vehicle(s) will lose this category (they stay in their company).</span>}</>
+            }
+          </div>
+          <div style={{ display: 'flex', gap: 10 }}>
+            <Btn color={t.red} onClick={() => deleteConfirm.type === 'company' ? deleteCompany(deleteConfirm.id) : deleteCategory(deleteConfirm.id)}>Yes, Delete</Btn>
+            <Btn outline color={t.muted} onClick={() => setDeleteConfirm(null)}>Cancel</Btn>
+          </div>
+        </ErpModal>
+      )}
+    </div>
+  );
+}
+
+function AssignVehicleModal({ plate, devIdno, currentCompanyId, currentCategoryId, companies, categories, onSave, onUnassign, onClose }) {
+  const { t } = useTheme();
+  const [companyId,  setCompanyId]  = useState(currentCompanyId  || '');
+  const [categoryId, setCategoryId] = useState(currentCategoryId || '');
+  const isMove = !!currentCompanyId;
+  return (
+    <ErpModal title={isMove ? `Move ${plate}` : `Assign ${plate}`} onClose={onClose}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <Sel label="Company *" value={companyId} onChange={e => setCompanyId(e.target.value)}>
+          <option value="">— Select company —</option>
+          {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </Sel>
+        <Sel label="Category (optional)" value={categoryId} onChange={e => setCategoryId(e.target.value)}>
+          <option value="">— No category —</option>
+          {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </Sel>
+        <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
+          <Btn onClick={() => onSave(devIdno, companyId, categoryId || null)} disabled={!companyId}>
+            {isMove ? 'Move Vehicle' : 'Assign Vehicle'}
+          </Btn>
+          {isMove && <Btn color={t.red} outline onClick={() => onUnassign(devIdno)}>Unassign</Btn>}
+          <Btn outline color={t.muted} onClick={onClose}>Cancel</Btn>
+        </div>
+      </div>
+    </ErpModal>
+  );
+}
+
+function BulkAssignModal({ count, companies, categories, onSave, onClose }) {
+  const [companyId,  setCompanyId]  = useState('');
+  const [categoryId, setCategoryId] = useState('');
+  return (
+    <ErpModal title={`Assign ${count} vehicles`} onClose={onClose}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <Sel label="Company *" value={companyId} onChange={e => setCompanyId(e.target.value)}>
+          <option value="">— Select company —</option>
+          {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </Sel>
+        <Sel label="Category (optional)" value={categoryId} onChange={e => setCategoryId(e.target.value)}>
+          <option value="">— No category —</option>
+          {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </Sel>
+        <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
+          <Btn onClick={() => onSave(companyId, categoryId || null)} disabled={!companyId}>Assign All</Btn>
+          <Btn outline color="#888" onClick={onClose}>Cancel</Btn>
+        </div>
+      </div>
+    </ErpModal>
+  );
+}
 
 // ── View: Fuel Consumption Report ─────────────────────────────────────────────
 
@@ -2172,6 +2733,7 @@ function NotificationsView({ events, onClear }) {
 const NAV = [
   { id: "dashboard",   icon: "◈",  label: "Dashboard"     },
   { id: "vehicles",    icon: "🚌", label: "Vehicles"      },
+  { id: "erp",         icon: "🏢", label: "Fleet ERP"     },
   { id: "alarms",      icon: "⚡", label: "Alarms"        },
   { id: "notifs",      icon: "🔔", label: "Notifications" },
   { id: "fuel",        icon: "⛽", label: "Fuel Report"   },
@@ -2296,7 +2858,7 @@ function FleetDashboardContent() {
   useEffect(() => { fetchVehicles(); }, [fetchVehicles]);
 
   useEffect(() => {
-    if (view === "vehicles" || view === "fuel" || view === "fuelrpt") fetchVehicles();
+    if (view === "vehicles" || view === "fuel" || view === "fuelrpt" || view === "erp") fetchVehicles();
     if (view === "alarms") fetchAlarms();
   }, [view, fetchVehicles, fetchAlarms]);
 
@@ -2525,6 +3087,7 @@ function FleetDashboardContent() {
             <AlarmsView alarms={alarms} loading={alarmLoading} error={alarmError}
               onRetry={() => { alarmsFetched.current = false; fetchAlarms(); }} />
           )}
+          {view === "erp"         && <FleetERPView vehicles={vehicles} />}
           {view === "notifs"      && <NotificationsView events={accEvents} onClear={clearNotifications} />}
           {view === "fuel"        && <FuelConsumptionView vehicles={vehicles} />}
           {view === "fuelrpt"     && <FuelDailyMonthlyView vehicles={vehicles} />}
