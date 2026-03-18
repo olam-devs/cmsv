@@ -3264,7 +3264,7 @@ function RoutesView({ vehicles }) {
     const map = window.L.map(mapRef.current, { center: [-6.8, 39.28], zoom: 12 });
     window.L.tileLayer('https://api.maptiler.com/maps/streets-v2/{z}/{x}/{y}.png?key=S4cAJJ9BRn9tH2FKnSNr', {
       attribution: '© <a href="https://www.maptiler.com/">MapTiler</a> © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-      tileSize: 512, zoomOffset: -1,
+      maxZoom: 19,
     }).addTo(map);
 
     map.on('click', e => {
