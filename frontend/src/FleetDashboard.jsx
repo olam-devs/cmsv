@@ -3262,8 +3262,9 @@ function RoutesView({ vehicles }) {
     if (mapInstanceRef.current) { mapInstanceRef.current.remove(); mapInstanceRef.current = null; }
 
     const map = window.L.map(mapRef.current, { center: [-6.8, 39.28], zoom: 12 });
-    window.L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '© OpenStreetMap contributors',
+    window.L.tileLayer('https://api.maptiler.com/maps/streets-v2/{z}/{x}/{y}.png?key=9Jv7OvBMWAN3BhPyCkjo', {
+      attribution: '© <a href="https://www.maptiler.com/">MapTiler</a> © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+      tileSize: 512, zoomOffset: -1,
     }).addTo(map);
 
     map.on('click', e => {
