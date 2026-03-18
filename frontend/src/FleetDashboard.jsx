@@ -1,4 +1,13 @@
 import { useState, useEffect, useCallback, useRef, createContext, useContext } from "react";
+import L from "leaflet";
+import "leaflet/dist/leaflet.css";
+// Fix Leaflet default icon paths broken by bundlers
+delete L.Icon.Default.prototype._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
+  iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
+  shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+});
 
 // ── API Config ────────────────────────────────────────────────────────────────
 const API_BASE = "/api";
@@ -3258,11 +3267,11 @@ function RoutesView({ vehicles }) {
 
   // ── Leaflet map init ─────────────────────────────────────────────────────
   useEffect(() => {
-    if (tab !== 'locations' || !mapRef.current || !window.L) return;
+    if (tab !== 'locations' || !mapRef.current || !L) return;
     if (mapInstanceRef.current) { mapInstanceRef.current.remove(); mapInstanceRef.current = null; }
 
-    const map = window.L.map(mapRef.current, { center: [-6.8, 39.28], zoom: 12 });
-    window.L.tileLayer('https://api.maptiler.com/maps/streets-v2/{z}/{x}/{y}.png?key=S4cAJJ9BRn9tH2FKnSNr', {
+    const map = L.map(mapRef.current, { center: [-6.8, 39.28], zoom: 12 });
+    L.tileLayer('https://api.maptiler.com/maps/streets-v2/{z}/{x}/{y}.png?key=S4cAJJ9BRn9tH2FKnSNr', {
       attribution: '© <a href="https://www.maptiler.com/">MapTiler</a> © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
       maxZoom: 19,
     }).addTo(map);
@@ -3282,18 +3291,18 @@ function RoutesView({ vehicles }) {
     // Draw saved locations
     for (const loc of locations) {
       if (loc.type === 'polygon' && Array.isArray(loc.polygon) && loc.polygon.length >= 3) {
-        window.L.polygon(loc.polygon, { color: loc.color, fillColor: loc.color, fillOpacity: 0.18, weight: 2 })
+        L.polygon(loc.polygon, { color: loc.color, fillColor: loc.color, fillOpacity: 0.18, weight: 2 })
           .bindTooltip(`<b>${loc.name}</b><br>Polygon · ${loc.polygon.length} pts`)
           .addTo(map);
         // Centroid marker
-        window.L.circleMarker([loc.lat, loc.lng], { radius: 6, color: loc.color, fillColor: loc.color, fillOpacity: 1 })
+        L.circleMarker([loc.lat, loc.lng], { radius: 6, color: loc.color, fillColor: loc.color, fillOpacity: 1 })
           .bindPopup(`<b>${loc.name}</b><br>Polygon area`)
           .addTo(map);
       } else {
-        window.L.circle([loc.lat, loc.lng], { radius: loc.radius || 200, color: loc.color, fillColor: loc.color, fillOpacity: 0.15, weight: 2 })
+        L.circle([loc.lat, loc.lng], { radius: loc.radius || 200, color: loc.color, fillColor: loc.color, fillOpacity: 0.15, weight: 2 })
           .bindTooltip(`<b>${loc.name}</b><br>r=${loc.radius}m`)
           .addTo(map);
-        window.L.circleMarker([loc.lat, loc.lng], { radius: 7, color: loc.color, fillColor: loc.color, fillOpacity: 1 })
+        L.circleMarker([loc.lat, loc.lng], { radius: 7, color: loc.color, fillColor: loc.color, fillOpacity: 1 })
           .bindPopup(`<b>${loc.name}</b><br>${loc.lat?.toFixed(5)}, ${loc.lng?.toFixed(5)}<br>Radius: ${loc.radius}m`)
           .addTo(map);
       }
@@ -3303,7 +3312,7 @@ function RoutesView({ vehicles }) {
       const latLngs = locations.flatMap(l =>
         l.type === 'polygon' ? l.polygon : [[l.lat, l.lng]]
       );
-      try { map.fitBounds(window.L.latLngBounds(latLngs), { padding: [30, 30] }); } catch (_) {}
+      try { map.fitBounds(L.latLngBounds(latLngs), { padding: [30, 30] }); } catch (_) {}
     }
 
     mapInstanceRef.current = map;
@@ -3318,7 +3327,7 @@ function RoutesView({ vehicles }) {
   // ── Polygon preview layer (updates without recreating map) ────────────────
   useEffect(() => {
     const map = mapInstanceRef.current;
-    if (!map || !window.L) return;
+    if (!map || !L) return;
 
     // Clear previous preview
     if (previewLayerRef.current) { previewLayerRef.current.remove(); previewLayerRef.current = null; }
@@ -3329,7 +3338,7 @@ function RoutesView({ vehicles }) {
 
     // Vertex dot markers
     polyVertices.forEach((v, i) => {
-      const m = window.L.circleMarker([v[0], v[1]], {
+      const m = L.circleMarker([v[0], v[1]], {
         radius: i === 0 ? 8 : 5,
         color: '#ff9500', fillColor: '#ff9500', fillOpacity: i === 0 ? 1 : 0.7, weight: 2,
       }).bindTooltip(i === 0 ? 'Start' : `#${i + 1}`).addTo(map);
@@ -3338,7 +3347,7 @@ function RoutesView({ vehicles }) {
 
     // Preview polygon / polyline
     if (polyVertices.length >= 2) {
-      previewLayerRef.current = window.L.polygon(polyVertices, {
+      previewLayerRef.current = L.polygon(polyVertices, {
         color: '#ff9500', fillColor: '#ff9500', fillOpacity: 0.1,
         dashArray: '6,4', weight: 2,
       }).addTo(map);
