@@ -21,6 +21,7 @@ const fs = require('fs');
 const logger = require('../utils/logger');
 const cms    = require('./cmsv6.service');
 const sms    = require('./sms.service');
+const tripTracker = require('./trips.service');
 
 const STATE_FILE = path.join(__dirname, '../../../data/monitor-state.json');
 
@@ -165,6 +166,10 @@ async function poll() {
     prev.vehicleName = vehicleName;
     if (lat != null) prev.lastLat = lat;
     if (lng != null) prev.lastLng = lng;
+
+    // ── Route trip tracker ─────────────────────────────────────────────────
+    tripTracker.onVehiclePosition(id, plate, lat, lng, fuel, accOn, s.sp != null ? s.sp / 10 : null, s.lc ?? null)
+      .catch(e => logger.warn('[Monitor] tripTracker: ' + e.message));
 
     // ── Online / offline transition (2-poll confirmation) ─────────────────
     if (online && !prev.online) {

@@ -1233,4 +1233,75 @@ router.get('/erp/summary', async (req, res) => {
   ok(res, { companies: companyData, categories, unassigned });
 });
 
+// ══════════════════════════════════════════════════════════════════════════
+//  ROUTE TRACKER (locations, route definitions, trips, rankings)
+// ══════════════════════════════════════════════════════════════════════════
+
+const locSvc   = require('../services/locations.service');
+const routeDef = require('../services/routes-def.service');
+const tripSvc  = require('../services/trips.service');
+
+// ── Locations ──────────────────────────────────────────────────────────────
+router.get('/routemgr/locations', (req, res) => ok(res, locSvc.listLocations()));
+
+router.post('/routemgr/locations', (req, res) => {
+  const { name, lat, lng, radius, color } = req.body;
+  if (!name || lat == null || lng == null) return err(res, 'name, lat, lng are required');
+  ok(res, locSvc.createLocation({ name, lat, lng, radius, color }));
+});
+
+router.put('/routemgr/locations/:id', (req, res) => {
+  try { ok(res, locSvc.updateLocation(req.params.id, req.body)); }
+  catch (e) { err(res, e.message); }
+});
+
+router.delete('/routemgr/locations/:id', (req, res) => {
+  locSvc.deleteLocation(req.params.id);
+  ok(res, { deleted: true });
+});
+
+// ── Route definitions ──────────────────────────────────────────────────────
+router.get('/routemgr/routes', (req, res) => {
+  const routes = routeDef.listRoutes();
+  const locs   = locSvc.listLocations();
+  const locMap = Object.fromEntries(locs.map(l => [l.id, l]));
+  ok(res, routes.map(r => ({
+    ...r,
+    fromName: locMap[r.fromId]?.name || r.fromId,
+    toName:   locMap[r.toId]?.name   || r.toId,
+  })));
+});
+
+router.post('/routemgr/routes', (req, res) => {
+  const { name, fromId, toId, color, speedLimitKmh } = req.body;
+  if (!name || !fromId || !toId) return err(res, 'name, fromId, toId are required');
+  if (fromId === toId) return err(res, 'fromId and toId must be different');
+  ok(res, routeDef.createRoute({ name, fromId, toId, color, speedLimitKmh }));
+});
+
+router.put('/routemgr/routes/:id', (req, res) => {
+  try { ok(res, routeDef.updateRoute(req.params.id, req.body)); }
+  catch (e) { err(res, e.message); }
+});
+
+router.delete('/routemgr/routes/:id', (req, res) => {
+  routeDef.deleteRoute(req.params.id);
+  ok(res, { deleted: true });
+});
+
+// ── Trips ──────────────────────────────────────────────────────────────────
+router.get('/routemgr/trips', (req, res) => {
+  const { routeId, devIdno, limit, from, to } = req.query;
+  ok(res, tripSvc.listTrips({ routeId, devIdno, limit: Number(limit) || 100, from, to }));
+});
+
+// ── Rankings ───────────────────────────────────────────────────────────────
+router.get('/routemgr/rankings/:routeId', (req, res) => {
+  ok(res, tripSvc.getRankings(req.params.routeId));
+});
+
+router.get('/routemgr/leaderboard', (req, res) => {
+  ok(res, tripSvc.getLeaderboard());
+});
+
 module.exports = router;

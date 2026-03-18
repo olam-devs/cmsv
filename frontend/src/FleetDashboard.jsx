@@ -3097,6 +3097,562 @@ function NotificationsView({ events, onClear }) {
   );
 }
 
+// ── View: Route Tracker ───────────────────────────────────────────────────────
+
+// ── ERP color palette reuse ───────────────────────────────────────────────────
+const ROUTE_COLORS = ['#4318d1','#39b8ff','#05cd99','#ff9500','#ee5d50','#868cff','#21d4fd','#ff6b6b'];
+
+function RouteScoreBar({ score, size = 'md' }) {
+  const { t } = useTheme();
+  const color = score >= 80 ? t.green : score >= 60 ? t.orange : t.red;
+  const h = size === 'sm' ? 6 : 10;
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: size === 'sm' ? 80 : 120 }}>
+      <div style={{ flex: 1, height: h, background: t.bgAlt, borderRadius: h, overflow: 'hidden' }}>
+        <div style={{ width: `${score}%`, height: '100%', background: color, borderRadius: h, transition: 'width 0.4s' }} />
+      </div>
+      <span style={{ fontSize: size === 'sm' ? 11 : 13, fontWeight: 800, color, minWidth: 28 }}>{score}</span>
+    </div>
+  );
+}
+
+function RankingBarChart({ rankings }) {
+  const { t } = useTheme();
+  if (!rankings.length) return <Empty icon="🏆" text="No trips recorded on this route yet" />;
+  const max = Math.max(...rankings.map(r => r.avgScore), 1);
+  const W = 500, H = 220, PAD = 40, BAR_GAP = 8;
+  const barW = Math.max(20, Math.min(60, (W - PAD * 2 - BAR_GAP * (rankings.length - 1)) / rankings.length));
+  const totalW = rankings.length * barW + (rankings.length - 1) * BAR_GAP + PAD * 2;
+  const medalColors = ['#FFD700', '#C0C0C0', '#CD7F32'];
+
+  return (
+    <div style={{ overflowX: 'auto', paddingBottom: 8 }}>
+      <svg viewBox={`0 0 ${totalW} ${H + 60}`} style={{ width: Math.max(totalW, 340), height: H + 60, display: 'block' }}>
+        {/* Grid lines */}
+        {[0, 25, 50, 75, 100].map(v => {
+          const y = PAD + (H - PAD) * (1 - v / 100);
+          return (
+            <g key={v}>
+              <line x1={PAD} y1={y} x2={totalW - PAD/2} y2={y} stroke={t.border} strokeWidth={1} strokeDasharray={v === 0 ? '0' : '4,4'} />
+              <text x={PAD - 6} y={y + 4} fill={t.muted} fontSize={9} textAnchor="end">{v}</text>
+            </g>
+          );
+        })}
+        {/* Bars */}
+        {rankings.map((r, i) => {
+          const barH = Math.max(4, ((r.avgScore || 0) / 100) * (H - PAD));
+          const x = PAD + i * (barW + BAR_GAP);
+          const y = H - barH;
+          const color = i < 3 ? medalColors[i] : ROUTE_COLORS[i % ROUTE_COLORS.length];
+          return (
+            <g key={r.devIdno}>
+              <rect x={x} y={y} width={barW} height={barH} fill={color} rx={4} opacity={0.9} />
+              <text x={x + barW/2} y={y - 5} fill={t.text} fontSize={10} textAnchor="middle" fontWeight="bold">{r.avgScore}</text>
+              <text x={x + barW/2} y={H + 14} fill={t.textSoft} fontSize={9} textAnchor="middle">{(r.plate || '').slice(0, 8)}</text>
+              <text x={x + barW/2} y={H + 26} fill={i < 3 ? color : t.muted} fontSize={9} textAnchor="middle" fontWeight={i < 3 ? 'bold' : 'normal'}>#{r.rank}</text>
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
+function Podium({ rankings }) {
+  const { t } = useTheme();
+  if (!rankings.length) return <Empty icon="🏆" text="No ranking data yet" />;
+  const top3 = rankings.slice(0, 3);
+  const order = [1, 0, 2]; // silver, gold, bronze display order
+  const heights = [80, 110, 60];
+  const medals  = ['🥇', '🥈', '🥉'];
+  const colors  = ['#FFD700', '#C0C0C0', '#CD7F32'];
+  return (
+    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'flex-end', gap: 12, padding: '24px 0 8px' }}>
+      {order.map((idx, pos) => {
+        const r = top3[idx];
+        if (!r) return <div key={pos} style={{ width: 110 }} />;
+        return (
+          <div key={r.devIdno} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
+            <div style={{ fontSize: pos === 1 ? 32 : 22 }}>{medals[idx]}</div>
+            <div style={{ fontSize: 13, fontWeight: 800, color: t.text, textAlign: 'center' }}>{r.plate}</div>
+            <div style={{ fontSize: 11, color: t.muted }}>Score: <b style={{ color: colors[idx] }}>{r.avgScore}</b></div>
+            <div style={{
+              width: 110, height: heights[pos],
+              background: `linear-gradient(180deg, ${colors[idx]}cc, ${colors[idx]}55)`,
+              borderRadius: '8px 8px 0 0',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontSize: 20, fontWeight: 800, color: colors[idx],
+            }}>#{r.rank}</div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function RoutesView({ vehicles }) {
+  const { t } = useTheme();
+  const [tab, setTab] = useState('locations');
+
+  // Shared data
+  const [locations,   setLocations]   = useState([]);
+  const [routes,      setRoutes]      = useState([]);
+  const [trips,       setTrips]       = useState([]);
+  const [rankings,    setRankings]    = useState([]);
+  const [leaderboard, setLeaderboard] = useState([]);
+  const [selectedRouteId, setSelectedRouteId] = useState('');
+  const [loading,  setLoading]  = useState(false);
+  const [error,    setError]    = useState(null);
+
+  // Modals
+  const [locModal,   setLocModal]   = useState(null); // null | { id?, name, lat, lng, radius, color }
+  const [routeModal, setRouteModal] = useState(null); // null | { id?, name, fromId, toId, color, speedLimitKmh }
+  const [pendingLatLng, setPendingLatLng] = useState(null); // lat/lng from map click
+
+  // Map ref for Leaflet
+  const mapRef = useRef(null);
+  const mapInstanceRef = useRef(null);
+
+  // ── Data loaders ────────────────────────────────────────────────────────
+  const loadAll = async () => {
+    setLoading(true); setError(null);
+    try {
+      const [locs, rts] = await Promise.all([
+        apiFetch('/routemgr/locations'),
+        apiFetch('/routemgr/routes'),
+      ]);
+      setLocations(locs); setRoutes(rts);
+    } catch (e) { setError(e.message); }
+    setLoading(false);
+  };
+
+  const loadRankings = async (routeId) => {
+    if (!routeId) return;
+    try {
+      const [rnk, tps] = await Promise.all([
+        apiFetch(`/routemgr/rankings/${routeId}`),
+        apiFetch(`/routemgr/trips?routeId=${routeId}&limit=50`),
+      ]);
+      setRankings(rnk); setTrips(tps);
+    } catch (e) { setError(e.message); }
+  };
+
+  const loadLeaderboard = async () => {
+    try { setLeaderboard(await apiFetch('/routemgr/leaderboard')); }
+    catch (e) { setError(e.message); }
+  };
+
+  useEffect(() => { loadAll(); }, []);
+  useEffect(() => { if (tab === 'leaderboard') loadLeaderboard(); }, [tab]);
+  useEffect(() => { loadRankings(selectedRouteId); }, [selectedRouteId]);
+
+  // ── Leaflet map init ─────────────────────────────────────────────────────
+  useEffect(() => {
+    if (tab !== 'locations' || !mapRef.current || !window.L) return;
+    if (mapInstanceRef.current) { mapInstanceRef.current.remove(); mapInstanceRef.current = null; }
+
+    const map = window.L.map(mapRef.current, { center: [-6.8, 39.28], zoom: 12 });
+    window.L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© OpenStreetMap contributors',
+    }).addTo(map);
+
+    // Click to place location
+    map.on('click', e => {
+      setPendingLatLng({ lat: Math.round(e.latlng.lat * 1000000) / 1000000, lng: Math.round(e.latlng.lng * 1000000) / 1000000 });
+    });
+
+    // Draw existing locations
+    for (const loc of locations) {
+      window.L.circle([loc.lat, loc.lng], { radius: loc.radius, color: loc.color, fillColor: loc.color, fillOpacity: 0.15, weight: 2 })
+        .bindTooltip(`<b>${loc.name}</b><br>r=${loc.radius}m`, { permanent: false })
+        .addTo(map);
+      window.L.circleMarker([loc.lat, loc.lng], { radius: 7, color: loc.color, fillColor: loc.color, fillOpacity: 1 })
+        .bindPopup(`<b>${loc.name}</b><br>${loc.lat}, ${loc.lng}<br>Radius: ${loc.radius}m`)
+        .addTo(map);
+    }
+
+    // Fit map to locations
+    if (locations.length > 0) {
+      const latLngs = locations.map(l => [l.lat, l.lng]);
+      try { map.fitBounds(window.L.latLngBounds(latLngs), { padding: [30, 30] }); } catch (_) {}
+    }
+
+    mapInstanceRef.current = map;
+    return () => { map.remove(); mapInstanceRef.current = null; };
+  }, [tab, locations]);
+
+  // Open create modal when map clicked
+  useEffect(() => {
+    if (pendingLatLng) {
+      setLocModal({ name: '', lat: pendingLatLng.lat, lng: pendingLatLng.lng, radius: 200, color: ROUTE_COLORS[locations.length % ROUTE_COLORS.length] });
+      setPendingLatLng(null);
+    }
+  }, [pendingLatLng]);
+
+  // ── CRUD handlers ────────────────────────────────────────────────────────
+  const saveLocation = async () => {
+    const { id, name, lat, lng, radius, color } = locModal;
+    if (!name.trim()) return;
+    try {
+      if (id) await apiFetch(`/routemgr/locations/${id}`, { method: 'PUT', body: JSON.stringify({ name, lat, lng, radius, color }) });
+      else    await apiFetch('/routemgr/locations',        { method: 'POST', body: JSON.stringify({ name, lat, lng, radius, color }) });
+      setLocModal(null); loadAll();
+    } catch (e) { alert(e.message); }
+  };
+
+  const deleteLocation = async (id) => {
+    if (!confirm('Delete this location?')) return;
+    try { await apiFetch(`/routemgr/locations/${id}`, { method: 'DELETE' }); loadAll(); }
+    catch (e) { alert(e.message); }
+  };
+
+  const saveRoute = async () => {
+    const { id, name, fromId, toId, color, speedLimitKmh } = routeModal;
+    if (!name.trim() || !fromId || !toId) return;
+    try {
+      if (id) await apiFetch(`/routemgr/routes/${id}`, { method: 'PUT', body: JSON.stringify({ name, fromId, toId, color, speedLimitKmh }) });
+      else    await apiFetch('/routemgr/routes',        { method: 'POST', body: JSON.stringify({ name, fromId, toId, color, speedLimitKmh }) });
+      setRouteModal(null); loadAll();
+    } catch (e) { alert(e.message); }
+  };
+
+  const deleteRoute = async (id) => {
+    if (!confirm('Delete this route?')) return;
+    try { await apiFetch(`/routemgr/routes/${id}`, { method: 'DELETE' }); loadAll(); }
+    catch (e) { alert(e.message); }
+  };
+
+  // ── Shared tab underline style ──────────────────────────────────────────
+  const tabStyle = (id) => ({
+    background: 'transparent', border: 'none',
+    borderBottom: `2px solid ${tab === id ? t.accent : 'transparent'}`,
+    padding: '10px 18px', color: tab === id ? t.accent : t.textSoft,
+    cursor: 'pointer', fontSize: 13, fontWeight: tab === id ? 700 : 500,
+    fontFamily: 'inherit', marginBottom: -1, transition: 'all 0.15s',
+  });
+
+  if (loading) return <Spinner label="Loading Route Tracker…" />;
+  if (error)   return <ErrorBanner message={error} onRetry={loadAll} />;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+      {/* Header */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10 }}>
+        <div>
+          <h2 style={{ margin: 0, fontSize: 20, fontWeight: 800, color: t.text }}>🗺️ Route Tracker</h2>
+          <div style={{ color: t.muted, fontSize: 13, marginTop: 3 }}>
+            {locations.length} location{locations.length !== 1 ? 's' : ''} · {routes.length} route{routes.length !== 1 ? 's' : ''} defined
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          {tab === 'locations' && <Btn onClick={() => setLocModal({ name: '', lat: -6.8, lng: 39.28, radius: 200, color: ROUTE_COLORS[0] })} style={{ fontSize: 12, padding: '7px 16px' }}>+ Location</Btn>}
+          {tab === 'routes'    && <Btn onClick={() => setRouteModal({ name: '', fromId: '', toId: '', color: ROUTE_COLORS[1], speedLimitKmh: 80 })} style={{ fontSize: 12, padding: '7px 16px' }} disabled={locations.length < 2}>+ Route</Btn>}
+        </div>
+      </div>
+
+      {/* Tab bar */}
+      <div style={{ display: 'flex', gap: 4, borderBottom: `1px solid ${t.border}` }}>
+        {[['locations','📍 Locations'],['routes','🛣️ Routes'],['rankings','🏆 Rankings'],['leaderboard','🎖️ Leaderboard']].map(([id, lbl]) => (
+          <button key={id} style={tabStyle(id)} onClick={() => setTab(id)}>{lbl}</button>
+        ))}
+      </div>
+
+      {/* ── LOCATIONS TAB ── */}
+      {tab === 'locations' && (
+        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+          {/* Map */}
+          <div style={{ flex: '1 1 420px', minWidth: 300, borderRadius: 14, overflow: 'hidden', border: `1px solid ${t.border}`, height: 420, position: 'relative' }}>
+            <div ref={mapRef} style={{ width: '100%', height: '100%' }} />
+            <div style={{ position: 'absolute', bottom: 8, left: 8, background: t.panel, borderRadius: 8, padding: '6px 12px', fontSize: 11, color: t.textSoft, zIndex: 1000, border: `1px solid ${t.border}` }}>
+              📍 Click map to add a location
+            </div>
+          </div>
+          {/* Locations list */}
+          <div style={{ flex: '1 1 260px', minWidth: 240, display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {locations.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '40px 20px', color: t.muted, background: t.panel, borderRadius: 14, border: `1px solid ${t.border}` }}>
+                <div style={{ fontSize: 36, marginBottom: 8 }}>📍</div>
+                <div style={{ fontWeight: 700, marginBottom: 4 }}>No locations yet</div>
+                <div style={{ fontSize: 12 }}>Click the map to place a waypoint</div>
+              </div>
+            ) : locations.map(loc => (
+              <div key={loc.id} style={{ background: t.panel, borderRadius: 12, border: `1px solid ${t.border}`, padding: '12px 14px', display: 'flex', alignItems: 'center', gap: 10 }}>
+                <div style={{ width: 10, height: 10, borderRadius: '50%', background: loc.color, flexShrink: 0, boxShadow: `0 0 6px ${loc.color}` }} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 700, fontSize: 13, color: t.text }}>{loc.name}</div>
+                  <div style={{ color: t.muted, fontSize: 11, marginTop: 2 }}>{loc.lat}, {loc.lng} · r={loc.radius}m</div>
+                </div>
+                <button onClick={() => setLocModal({ id: loc.id, name: loc.name, lat: loc.lat, lng: loc.lng, radius: loc.radius, color: loc.color })}
+                  style={{ background: 'transparent', border: `1px solid ${t.border}`, borderRadius: 7, padding: '4px 10px', color: t.textSoft, cursor: 'pointer', fontSize: 11, fontFamily: 'inherit' }}>Edit</button>
+                <button onClick={() => deleteLocation(loc.id)}
+                  style={{ background: 'transparent', border: 'none', color: t.red, cursor: 'pointer', fontSize: 16, lineHeight: 1, fontFamily: 'inherit' }}>×</button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── ROUTES TAB ── */}
+      {tab === 'routes' && (
+        <Panel>
+          {routes.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: '48px 40px', color: t.muted }}>
+              <div style={{ fontSize: 40, marginBottom: 10 }}>🛣️</div>
+              <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 6, color: t.text }}>No routes defined yet</div>
+              <div style={{ fontSize: 13, marginBottom: 20 }}>
+                {locations.length < 2 ? 'Add at least 2 locations first, then create routes between them.' : 'Click "+ Route" to link two locations.'}
+              </div>
+              {locations.length >= 2 && <Btn onClick={() => setRouteModal({ name: '', fromId: '', toId: '', color: ROUTE_COLORS[1], speedLimitKmh: 80 })}>+ Create First Route</Btn>}
+            </div>
+          ) : (
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                <thead>
+                  <tr style={{ background: t.bgAlt }}>
+                    {['Color','Route Name','From → To','Speed Limit','Created',''].map(h => (
+                      <th key={h} style={{ padding: '10px 14px', textAlign: 'left', color: t.muted, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.8, borderBottom: `1px solid ${t.border}` }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {routes.map((r, i) => (
+                    <tr key={r.id} style={{ background: i % 2 ? `${t.bgAlt}55` : 'transparent', borderBottom: `1px solid ${t.border}55` }}>
+                      <td style={{ padding: '10px 14px' }}><div style={{ width: 14, height: 14, borderRadius: '50%', background: r.color }} /></td>
+                      <td style={{ padding: '10px 14px', fontWeight: 700, color: t.text }}>{r.name}</td>
+                      <td style={{ padding: '10px 14px', color: t.textSoft }}>
+                        <span style={{ color: t.blue }}>{r.fromName}</span>
+                        <span style={{ margin: '0 8px', color: t.muted }}>→</span>
+                        <span style={{ color: t.green }}>{r.toName}</span>
+                        <span style={{ color: t.muted, marginLeft: 8, fontSize: 11 }}>(bidirectional)</span>
+                      </td>
+                      <td style={{ padding: '10px 14px', color: t.textSoft }}>{r.speedLimitKmh || 80} km/h</td>
+                      <td style={{ padding: '10px 14px', color: t.muted, fontSize: 11 }}>{r.createdAt ? new Date(r.createdAt).toLocaleDateString() : '—'}</td>
+                      <td style={{ padding: '10px 14px', textAlign: 'right', display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                        <button onClick={() => setRouteModal({ id: r.id, name: r.name, fromId: r.fromId, toId: r.toId, color: r.color, speedLimitKmh: r.speedLimitKmh || 80 })}
+                          style={{ background: 'transparent', border: `1px solid ${t.border}`, borderRadius: 7, padding: '4px 12px', color: t.textSoft, cursor: 'pointer', fontSize: 11, fontFamily: 'inherit' }}>Edit</button>
+                        <button onClick={() => deleteRoute(r.id)}
+                          style={{ background: 'transparent', border: `1px solid ${t.red}44`, borderRadius: 7, padding: '4px 12px', color: t.red, cursor: 'pointer', fontSize: 11, fontFamily: 'inherit' }}>Delete</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Panel>
+      )}
+
+      {/* ── RANKINGS TAB ── */}
+      {tab === 'rankings' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          {/* Route selector */}
+          <Panel>
+            <div style={{ padding: '14px 18px', display: 'flex', alignItems: 'center', gap: 12 }}>
+              <span style={{ color: t.textSoft, fontSize: 13, fontWeight: 600 }}>Select Route:</span>
+              <select value={selectedRouteId} onChange={e => setSelectedRouteId(e.target.value)}
+                style={{ background: t.bgAlt, border: `1px solid ${t.border}`, borderRadius: 10, padding: '8px 14px', color: t.text, fontSize: 13, fontFamily: 'inherit', outline: 'none', cursor: 'pointer', flex: 1, maxWidth: 320 }}>
+                <option value="">— Choose a route —</option>
+                {routes.map(r => <option key={r.id} value={r.id}>{r.name} ({r.fromName} ↔ {r.toName})</option>)}
+              </select>
+            </div>
+          </Panel>
+
+          {selectedRouteId && (
+            <>
+              {rankings.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '48px 40px', background: t.panel, borderRadius: 16, border: `1px solid ${t.border}` }}>
+                  <div style={{ fontSize: 40, marginBottom: 10 }}>⏳</div>
+                  <div style={{ fontWeight: 700, color: t.text, marginBottom: 6 }}>No trips on this route yet</div>
+                  <div style={{ fontSize: 13, color: t.muted }}>Rankings will appear automatically as vehicles complete this route.</div>
+                </div>
+              ) : (
+                <>
+                  {/* Bar chart */}
+                  <Panel title={`🏆 VEHICLE RANKINGS — ${routes.find(r => r.id === selectedRouteId)?.name || ''}`}>
+                    <div style={{ padding: '16px 18px' }}>
+                      <RankingBarChart rankings={rankings} />
+                    </div>
+                  </Panel>
+
+                  {/* Rankings table */}
+                  <Panel title={`📋 SCORE DETAILS (${rankings.length} vehicles)`}>
+                    <div style={{ overflowX: 'auto' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                        <thead>
+                          <tr style={{ background: t.bgAlt }}>
+                            {['Rank','Vehicle','Avg Score','Trips','Distance','Fuel/100km','Avg Time','Avg Speed'].map(h => (
+                              <th key={h} style={{ padding: '10px 14px', textAlign: 'left', color: t.muted, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.8, borderBottom: `1px solid ${t.border}`, whiteSpace: 'nowrap' }}>{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {rankings.map((r, i) => (
+                            <tr key={r.devIdno} style={{ background: i % 2 ? `${t.bgAlt}55` : 'transparent', borderBottom: `1px solid ${t.border}55` }}>
+                              <td style={{ padding: '10px 14px' }}>
+                                <span style={{ fontSize: 18 }}>{i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `#${r.rank}`}</span>
+                              </td>
+                              <td style={{ padding: '10px 14px', fontWeight: 700, color: t.text }}>{r.plate}</td>
+                              <td style={{ padding: '10px 14px', minWidth: 140 }}><RouteScoreBar score={r.avgScore || 0} /></td>
+                              <td style={{ padding: '10px 14px', color: t.accent, fontWeight: 700 }}>{r.totalTrips}</td>
+                              <td style={{ padding: '10px 14px', color: t.textSoft }}>{r.totalDistanceKm ? `${r.totalDistanceKm} km` : '—'}</td>
+                              <td style={{ padding: '10px 14px', color: r.avgFuelPer100km > 40 ? t.red : r.avgFuelPer100km > 25 ? t.orange : t.green }}>
+                                {r.avgFuelPer100km != null ? `${r.avgFuelPer100km}/100km` : '—'}
+                              </td>
+                              <td style={{ padding: '10px 14px', color: t.textSoft }}>{r.avgDurationMin != null ? `${r.avgDurationMin} min` : '—'}</td>
+                              <td style={{ padding: '10px 14px', color: t.textSoft }}>{r.avgSpeedKmh != null ? `${r.avgSpeedKmh} km/h` : '—'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </Panel>
+
+                  {/* Recent trips */}
+                  {trips.length > 0 && (
+                    <Panel title={`🕒 RECENT TRIPS (${trips.length})`}>
+                      <div style={{ overflowX: 'auto' }}>
+                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                          <thead>
+                            <tr style={{ background: t.bgAlt }}>
+                              {['Vehicle','Start Time','Duration','Distance','Fuel Used','Max Speed','Score'].map(h => (
+                                <th key={h} style={{ padding: '9px 12px', textAlign: 'left', color: t.muted, fontWeight: 700, fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.8, borderBottom: `1px solid ${t.border}` }}>{h}</th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {trips.map((trip, i) => (
+                              <tr key={trip.id} style={{ background: i % 2 ? `${t.bgAlt}44` : 'transparent', borderBottom: `1px solid ${t.border}44` }}>
+                                <td style={{ padding: '9px 12px', fontWeight: 700, color: t.text }}>{trip.plate}</td>
+                                <td style={{ padding: '9px 12px', color: t.textSoft }}>{trip.startTime ? new Date(trip.startTime).toLocaleString('en-TZ', { day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit' }) : '—'}</td>
+                                <td style={{ padding: '9px 12px', color: t.textSoft }}>{trip.durationMin} min</td>
+                                <td style={{ padding: '9px 12px', color: t.textSoft }}>{trip.distanceKm} km</td>
+                                <td style={{ padding: '9px 12px', color: trip.fuelUsed < 0 ? t.red : t.textSoft }}>{trip.fuelUsed != null ? `${trip.fuelUsed} (${trip.fuelPer100km ?? '?'}/100km)` : '—'}</td>
+                                <td style={{ padding: '9px 12px', color: trip.maxSpeedKmh > 80 ? t.red : t.textSoft }}>{trip.maxSpeedKmh != null ? `${trip.maxSpeedKmh} km/h` : '—'}</td>
+                                <td style={{ padding: '9px 12px' }}><RouteScoreBar score={trip.score || 0} size="sm" /></td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </Panel>
+                  )}
+                </>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
+      {/* ── LEADERBOARD TAB ── */}
+      {tab === 'leaderboard' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          {leaderboard.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: '60px 40px', background: t.panel, borderRadius: 16, border: `1px solid ${t.border}` }}>
+              <div style={{ fontSize: 52, marginBottom: 12 }}>🏆</div>
+              <div style={{ fontWeight: 800, fontSize: 16, color: t.text, marginBottom: 6 }}>Leaderboard is empty</div>
+              <div style={{ fontSize: 13, color: t.muted }}>Define locations and routes, then let vehicles drive — scores accumulate automatically.</div>
+            </div>
+          ) : (
+            <>
+              {/* Podium */}
+              <Panel title="🏆 TOP PERFORMERS">
+                <div style={{ padding: '0 18px 18px' }}>
+                  <Podium rankings={leaderboard} />
+                </div>
+              </Panel>
+
+              {/* Full leaderboard */}
+              <Panel title={`📊 FULL RANKING (${leaderboard.length} vehicles)`}>
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                    <thead>
+                      <tr style={{ background: t.bgAlt }}>
+                        {['Rank','Vehicle','Overall Score','Trips','Routes','Distance','Fuel/100km','Fuel (40%)','Time (30%)','Speed (20%)'].map(h => (
+                          <th key={h} style={{ padding: '10px 12px', textAlign: 'left', color: t.muted, fontWeight: 700, fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.8, borderBottom: `1px solid ${t.border}`, whiteSpace: 'nowrap' }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {leaderboard.map((r, i) => (
+                        <tr key={r.devIdno} style={{ background: i % 2 ? `${t.bgAlt}55` : 'transparent', borderBottom: `1px solid ${t.border}55` }}>
+                          <td style={{ padding: '10px 12px' }}>
+                            <span style={{ fontSize: 16 }}>{i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `#${r.rank}`}</span>
+                          </td>
+                          <td style={{ padding: '10px 12px', fontWeight: 800, color: t.text }}>{r.plate}</td>
+                          <td style={{ padding: '10px 12px', minWidth: 130 }}><RouteScoreBar score={r.avgScore || 0} /></td>
+                          <td style={{ padding: '10px 12px', color: t.accent, fontWeight: 700 }}>{r.totalTrips}</td>
+                          <td style={{ padding: '10px 12px', color: t.textSoft }}>{r.totalRoutes}</td>
+                          <td style={{ padding: '10px 12px', color: t.textSoft }}>{r.totalDistanceKm ? `${r.totalDistanceKm} km` : '—'}</td>
+                          <td style={{ padding: '10px 12px', color: r.avgFuelPer100km > 40 ? t.red : r.avgFuelPer100km > 25 ? t.orange : t.green }}>
+                            {r.avgFuelPer100km != null ? `${r.avgFuelPer100km}/100km` : '—'}
+                          </td>
+                          <td style={{ padding: '10px 12px' }}><RouteScoreBar score={r.avgScoreFuel || 0} size="sm" /></td>
+                          <td style={{ padding: '10px 12px' }}><RouteScoreBar score={r.avgScoreTime || 0} size="sm" /></td>
+                          <td style={{ padding: '10px 12px' }}><RouteScoreBar score={r.avgScoreSpeed || 0} size="sm" /></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </Panel>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* ── MODALS ── */}
+
+      {/* Location modal */}
+      {locModal && (
+        <ErpModal title={locModal.id ? 'Edit Location' : 'New Location'} onClose={() => setLocModal(null)}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <Inp label="Name *" value={locModal.name} onChange={e => setLocModal(p => ({ ...p, name: e.target.value }))} placeholder="e.g. Dar es Salaam Terminal" />
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+              <Inp label="Latitude" type="number" value={locModal.lat} onChange={e => setLocModal(p => ({ ...p, lat: Number(e.target.value) }))} step="0.000001" />
+              <Inp label="Longitude" type="number" value={locModal.lng} onChange={e => setLocModal(p => ({ ...p, lng: Number(e.target.value) }))} step="0.000001" />
+            </div>
+            <Inp label="Detection Radius (metres)" type="number" value={locModal.radius} onChange={e => setLocModal(p => ({ ...p, radius: Number(e.target.value) }))} min={50} max={5000} />
+            <div>
+              <div style={{ color: t.muted, fontSize: 11, fontWeight: 700, marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.8 }}>Colour</div>
+              <ColorPicker value={locModal.color} onChange={c => setLocModal(p => ({ ...p, color: c }))} />
+            </div>
+            <div style={{ display: 'flex', gap: 10, marginTop: 4 }}>
+              <Btn onClick={saveLocation} disabled={!locModal.name.trim()}>{locModal.id ? 'Save Changes' : 'Create Location'}</Btn>
+              <Btn onClick={() => setLocModal(null)} outline color={t.muted}>Cancel</Btn>
+            </div>
+          </div>
+        </ErpModal>
+      )}
+
+      {/* Route modal */}
+      {routeModal && (
+        <ErpModal title={routeModal.id ? 'Edit Route' : 'New Route'} onClose={() => setRouteModal(null)}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <Inp label="Route Name *" value={routeModal.name} onChange={e => setRouteModal(p => ({ ...p, name: e.target.value }))} placeholder="e.g. Dar → Airport" />
+            <Sel label="From Location *" value={routeModal.fromId} onChange={e => setRouteModal(p => ({ ...p, fromId: e.target.value }))}>
+              <option value="">— Select start location —</option>
+              {locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+            </Sel>
+            <Sel label="To Location *" value={routeModal.toId} onChange={e => setRouteModal(p => ({ ...p, toId: e.target.value }))}>
+              <option value="">— Select end location —</option>
+              {locations.filter(l => l.id !== routeModal.fromId).map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+            </Sel>
+            <Inp label="Speed Limit (km/h)" type="number" value={routeModal.speedLimitKmh} onChange={e => setRouteModal(p => ({ ...p, speedLimitKmh: Number(e.target.value) }))} min={20} max={200} />
+            <div>
+              <div style={{ color: t.muted, fontSize: 11, fontWeight: 700, marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.8 }}>Colour</div>
+              <ColorPicker value={routeModal.color} onChange={c => setRouteModal(p => ({ ...p, color: c }))} />
+            </div>
+            <div style={{ display: 'flex', gap: 10, marginTop: 4 }}>
+              <Btn onClick={saveRoute} disabled={!routeModal.name.trim() || !routeModal.fromId || !routeModal.toId}>{routeModal.id ? 'Save Changes' : 'Create Route'}</Btn>
+              <Btn onClick={() => setRouteModal(null)} outline color={t.muted}>Cancel</Btn>
+            </div>
+          </div>
+        </ErpModal>
+      )}
+    </div>
+  );
+}
+
 // ── Main App ──────────────────────────────────────────────────────────────────
 
 const NAV = [
@@ -3108,6 +3664,7 @@ const NAV = [
   { id: "notifs",      icon: "🔔", label: "Notifications" },
   { id: "fuel",        icon: "⛽", label: "Fuel Report"   },
   { id: "fuelrpt",     icon: "📅", label: "Daily/Monthly" },
+  { id: "routemgr",    icon: "🗺️", label: "Route Tracker" },
   { id: "chat",        icon: "🤖", label: "FleetBot AI"   },
 ];
 
@@ -3241,7 +3798,7 @@ function FleetDashboardContent() {
   useEffect(() => { fetchVehicles(); }, [fetchVehicles]);
 
   useEffect(() => {
-    if (view === "vehicles" || view === "cameras" || view === "fuel" || view === "fuelrpt" || view === "erp") fetchVehicles();
+    if (view === "vehicles" || view === "cameras" || view === "fuel" || view === "fuelrpt" || view === "erp" || view === "routemgr") fetchVehicles();
     if (view === "alarms") fetchAlarms();
   }, [view, fetchVehicles, fetchAlarms]);
 
@@ -3507,6 +4064,7 @@ function FleetDashboardContent() {
           {view === "cameras"     && <LiveCamerasView vehicles={filteredVehicles} erpSummary={erpSummary} />}
           {view === "fuel"        && <FuelConsumptionView vehicles={filteredVehicles} erpSummary={erpSummary} />}
           {view === "fuelrpt"     && <FuelDailyMonthlyView vehicles={filteredVehicles} erpSummary={erpSummary} />}
+          {view === "routemgr"    && <RoutesView vehicles={filteredVehicles} erpSummary={erpSummary} />}
           {view === "chat"        && <ChatView />}
         </div>
       </div>
