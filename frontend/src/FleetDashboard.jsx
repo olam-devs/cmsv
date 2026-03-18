@@ -3205,9 +3205,19 @@ function RoutesView({ vehicles }) {
   const [error,    setError]    = useState(null);
 
   // Modals
-  const [locModal,   setLocModal]   = useState(null); // null | { id?, name, lat, lng, radius, color }
-  const [routeModal, setRouteModal] = useState(null); // null | { id?, name, fromId, toId, color, speedLimitKmh }
-  const [pendingLatLng, setPendingLatLng] = useState(null); // lat/lng from map click
+  const [locModal,   setLocModal]   = useState(null);
+  const [routeModal, setRouteModal] = useState(null);
+
+  // Polygon drawing state
+  const [drawMode,      setDrawMode]      = useState('circle'); // 'circle' | 'polygon'
+  const [polyVertices,  setPolyVertices]  = useState([]);       // [[lat,lng], ...]
+  const drawModeRef    = useRef('circle');
+  const polyVertRef    = useRef([]);
+  const previewLayerRef = useRef(null);
+  const vertexMarkersRef = useRef([]);
+
+  useEffect(() => { drawModeRef.current = drawMode; }, [drawMode]);
+  useEffect(() => { polyVertRef.current = polyVertices; }, [polyVertices]);
 
   // Map ref for Leaflet
   const mapRef = useRef(null);
@@ -3256,48 +3266,104 @@ function RoutesView({ vehicles }) {
       attribution: '© OpenStreetMap contributors',
     }).addTo(map);
 
-    // Click to place location
     map.on('click', e => {
-      setPendingLatLng({ lat: Math.round(e.latlng.lat * 1000000) / 1000000, lng: Math.round(e.latlng.lng * 1000000) / 1000000 });
+      const lat = Math.round(e.latlng.lat * 1000000) / 1000000;
+      const lng = Math.round(e.latlng.lng * 1000000) / 1000000;
+      if (drawModeRef.current === 'polygon') {
+        // Add polygon vertex
+        setPolyVertices(prev => [...prev, [lat, lng]]);
+      } else {
+        // Circle mode: open create modal
+        setLocModal({ name: '', type: 'circle', lat, lng, radius: 200, color: ROUTE_COLORS[locations.length % ROUTE_COLORS.length] });
+      }
     });
 
-    // Draw existing locations
+    // Draw saved locations
     for (const loc of locations) {
-      window.L.circle([loc.lat, loc.lng], { radius: loc.radius, color: loc.color, fillColor: loc.color, fillOpacity: 0.15, weight: 2 })
-        .bindTooltip(`<b>${loc.name}</b><br>r=${loc.radius}m`, { permanent: false })
-        .addTo(map);
-      window.L.circleMarker([loc.lat, loc.lng], { radius: 7, color: loc.color, fillColor: loc.color, fillOpacity: 1 })
-        .bindPopup(`<b>${loc.name}</b><br>${loc.lat}, ${loc.lng}<br>Radius: ${loc.radius}m`)
-        .addTo(map);
+      if (loc.type === 'polygon' && Array.isArray(loc.polygon) && loc.polygon.length >= 3) {
+        window.L.polygon(loc.polygon, { color: loc.color, fillColor: loc.color, fillOpacity: 0.18, weight: 2 })
+          .bindTooltip(`<b>${loc.name}</b><br>Polygon · ${loc.polygon.length} pts`)
+          .addTo(map);
+        // Centroid marker
+        window.L.circleMarker([loc.lat, loc.lng], { radius: 6, color: loc.color, fillColor: loc.color, fillOpacity: 1 })
+          .bindPopup(`<b>${loc.name}</b><br>Polygon area`)
+          .addTo(map);
+      } else {
+        window.L.circle([loc.lat, loc.lng], { radius: loc.radius || 200, color: loc.color, fillColor: loc.color, fillOpacity: 0.15, weight: 2 })
+          .bindTooltip(`<b>${loc.name}</b><br>r=${loc.radius}m`)
+          .addTo(map);
+        window.L.circleMarker([loc.lat, loc.lng], { radius: 7, color: loc.color, fillColor: loc.color, fillOpacity: 1 })
+          .bindPopup(`<b>${loc.name}</b><br>${loc.lat?.toFixed(5)}, ${loc.lng?.toFixed(5)}<br>Radius: ${loc.radius}m`)
+          .addTo(map);
+      }
     }
 
-    // Fit map to locations
     if (locations.length > 0) {
-      const latLngs = locations.map(l => [l.lat, l.lng]);
+      const latLngs = locations.flatMap(l =>
+        l.type === 'polygon' ? l.polygon : [[l.lat, l.lng]]
+      );
       try { map.fitBounds(window.L.latLngBounds(latLngs), { padding: [30, 30] }); } catch (_) {}
     }
 
     mapInstanceRef.current = map;
-    return () => { map.remove(); mapInstanceRef.current = null; };
+    return () => {
+      previewLayerRef.current = null;
+      vertexMarkersRef.current = [];
+      map.remove();
+      mapInstanceRef.current = null;
+    };
   }, [tab, locations]);
 
-  // Open create modal when map clicked
+  // ── Polygon preview layer (updates without recreating map) ────────────────
   useEffect(() => {
-    if (pendingLatLng) {
-      setLocModal({ name: '', lat: pendingLatLng.lat, lng: pendingLatLng.lng, radius: 200, color: ROUTE_COLORS[locations.length % ROUTE_COLORS.length] });
-      setPendingLatLng(null);
+    const map = mapInstanceRef.current;
+    if (!map || !window.L) return;
+
+    // Clear previous preview
+    if (previewLayerRef.current) { previewLayerRef.current.remove(); previewLayerRef.current = null; }
+    vertexMarkersRef.current.forEach(m => m.remove());
+    vertexMarkersRef.current = [];
+
+    if (polyVertices.length === 0) return;
+
+    // Vertex dot markers
+    polyVertices.forEach((v, i) => {
+      const m = window.L.circleMarker([v[0], v[1]], {
+        radius: i === 0 ? 8 : 5,
+        color: '#ff9500', fillColor: '#ff9500', fillOpacity: i === 0 ? 1 : 0.7, weight: 2,
+      }).bindTooltip(i === 0 ? 'Start' : `#${i + 1}`).addTo(map);
+      vertexMarkersRef.current.push(m);
+    });
+
+    // Preview polygon / polyline
+    if (polyVertices.length >= 2) {
+      previewLayerRef.current = window.L.polygon(polyVertices, {
+        color: '#ff9500', fillColor: '#ff9500', fillOpacity: 0.1,
+        dashArray: '6,4', weight: 2,
+      }).addTo(map);
     }
-  }, [pendingLatLng]);
+  }, [polyVertices]);
 
   // ── CRUD handlers ────────────────────────────────────────────────────────
   const saveLocation = async () => {
-    const { id, name, lat, lng, radius, color } = locModal;
+    const { id, name, type, lat, lng, radius, polygon, color } = locModal;
     if (!name.trim()) return;
+    const body = type === 'polygon'
+      ? { name, type: 'polygon', polygon, color }
+      : { name, type: 'circle', lat, lng, radius, color };
     try {
-      if (id) await apiFetch(`/routemgr/locations/${id}`, { method: 'PUT', body: JSON.stringify({ name, lat, lng, radius, color }) });
-      else    await apiFetch('/routemgr/locations',        { method: 'POST', body: JSON.stringify({ name, lat, lng, radius, color }) });
+      if (id) await apiFetch(`/routemgr/locations/${id}`, { method: 'PUT', body: JSON.stringify(body) });
+      else    await apiFetch('/routemgr/locations',        { method: 'POST', body: JSON.stringify(body) });
       setLocModal(null); loadAll();
     } catch (e) { alert(e.message); }
+  };
+
+  // Finish drawing polygon → open name modal
+  const finishPolygon = () => {
+    if (polyVertices.length < 3) return;
+    setLocModal({ name: '', type: 'polygon', polygon: polyVertices, color: ROUTE_COLORS[locations.length % ROUTE_COLORS.length] });
+    setPolyVertices([]);
+    setDrawMode('circle');
   };
 
   const deleteLocation = async (id) => {
@@ -3345,7 +3411,16 @@ function RoutesView({ vehicles }) {
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
-          {tab === 'locations' && <Btn onClick={() => setLocModal({ name: '', lat: -6.8, lng: 39.28, radius: 200, color: ROUTE_COLORS[0] })} style={{ fontSize: 12, padding: '7px 16px' }}>+ Location</Btn>}
+          {tab === 'locations' && <>
+            <Btn onClick={() => {
+              const nextMode = drawMode === 'polygon' ? 'circle' : 'polygon';
+              setDrawMode(nextMode);
+              if (nextMode === 'circle') { setPolyVertices([]); }
+            }} style={{ fontSize: 12, padding: '7px 16px', background: drawMode === 'polygon' ? '#e67e22' : undefined }}>
+              {drawMode === 'polygon' ? `⬡ Drawing… (${polyVertices.length} pts)` : '⬡ Draw Polygon'}
+            </Btn>
+            <Btn onClick={() => setLocModal({ name: '', type: 'circle', lat: -6.8, lng: 39.28, radius: 200, color: ROUTE_COLORS[0] })} style={{ fontSize: 12, padding: '7px 16px' }}>+ Circle</Btn>
+          </>}
           {tab === 'routes'    && <Btn onClick={() => setRouteModal({ name: '', fromId: '', toId: '', color: ROUTE_COLORS[1], speedLimitKmh: 80 })} style={{ fontSize: 12, padding: '7px 16px' }} disabled={locations.length < 2}>+ Route</Btn>}
         </div>
       </div>
@@ -3364,8 +3439,20 @@ function RoutesView({ vehicles }) {
           <div style={{ flex: '1 1 420px', minWidth: 300, borderRadius: 14, overflow: 'hidden', border: `1px solid ${t.border}`, height: 420, position: 'relative' }}>
             <div ref={mapRef} style={{ width: '100%', height: '100%' }} />
             <div style={{ position: 'absolute', bottom: 8, left: 8, background: t.panel, borderRadius: 8, padding: '6px 12px', fontSize: 11, color: t.textSoft, zIndex: 1000, border: `1px solid ${t.border}` }}>
-              📍 Click map to add a location
+              {drawMode === 'polygon' ? '⬡ Click map to add polygon vertices' : '📍 Click map to place a circle location'}
             </div>
+            {polyVertices.length > 0 && (
+              <div style={{ position: 'absolute', bottom: 8, right: 8, display: 'flex', gap: 6, zIndex: 1000 }}>
+                <button onClick={finishPolygon} disabled={polyVertices.length < 3}
+                  style={{ background: polyVertices.length >= 3 ? '#27ae60' : t.muted, color: '#fff', border: 'none', borderRadius: 7, padding: '5px 12px', fontSize: 11, cursor: polyVertices.length >= 3 ? 'pointer' : 'default', fontFamily: 'inherit', fontWeight: 700 }}>
+                  ✓ Finish{polyVertices.length < 3 ? ` (need ${3 - polyVertices.length} more)` : ''}
+                </button>
+                <button onClick={() => setPolyVertices([])}
+                  style={{ background: t.red, color: '#fff', border: 'none', borderRadius: 7, padding: '5px 10px', fontSize: 11, cursor: 'pointer', fontFamily: 'inherit', fontWeight: 700 }}>
+                  ✕ Clear
+                </button>
+              </div>
+            )}
           </div>
           {/* Locations list */}
           <div style={{ flex: '1 1 260px', minWidth: 240, display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -3380,9 +3467,15 @@ function RoutesView({ vehicles }) {
                 <div style={{ width: 10, height: 10, borderRadius: '50%', background: loc.color, flexShrink: 0, boxShadow: `0 0 6px ${loc.color}` }} />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontWeight: 700, fontSize: 13, color: t.text }}>{loc.name}</div>
-                  <div style={{ color: t.muted, fontSize: 11, marginTop: 2 }}>{loc.lat}, {loc.lng} · r={loc.radius}m</div>
+                  <div style={{ color: t.muted, fontSize: 11, marginTop: 2 }}>
+                    {loc.type === 'polygon'
+                      ? `⬡ Polygon · ${loc.polygon?.length || 0} vertices`
+                      : `📍 Circle · r=${loc.radius}m`}
+                  </div>
                 </div>
-                <button onClick={() => setLocModal({ id: loc.id, name: loc.name, lat: loc.lat, lng: loc.lng, radius: loc.radius, color: loc.color })}
+                <button onClick={() => setLocModal(loc.type === 'polygon'
+                  ? { id: loc.id, name: loc.name, type: 'polygon', polygon: loc.polygon, color: loc.color }
+                  : { id: loc.id, name: loc.name, type: 'circle', lat: loc.lat, lng: loc.lng, radius: loc.radius, color: loc.color })}
                   style={{ background: 'transparent', border: `1px solid ${t.border}`, borderRadius: 7, padding: '4px 10px', color: t.textSoft, cursor: 'pointer', fontSize: 11, fontFamily: 'inherit' }}>Edit</button>
                 <button onClick={() => deleteLocation(loc.id)}
                   style={{ background: 'transparent', border: 'none', color: t.red, cursor: 'pointer', fontSize: 16, lineHeight: 1, fontFamily: 'inherit' }}>×</button>
@@ -3607,11 +3700,27 @@ function RoutesView({ vehicles }) {
         <ErpModal title={locModal.id ? 'Edit Location' : 'New Location'} onClose={() => setLocModal(null)}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
             <Inp label="Name *" value={locModal.name} onChange={e => setLocModal(p => ({ ...p, name: e.target.value }))} placeholder="e.g. Dar es Salaam Terminal" />
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-              <Inp label="Latitude" type="number" value={locModal.lat} onChange={e => setLocModal(p => ({ ...p, lat: Number(e.target.value) }))} step="0.000001" />
-              <Inp label="Longitude" type="number" value={locModal.lng} onChange={e => setLocModal(p => ({ ...p, lng: Number(e.target.value) }))} step="0.000001" />
-            </div>
-            <Inp label="Detection Radius (metres)" type="number" value={locModal.radius} onChange={e => setLocModal(p => ({ ...p, radius: Number(e.target.value) }))} min={50} max={5000} />
+            {locModal.type === 'polygon' ? (
+              <div style={{ background: t.bgAlt, borderRadius: 10, padding: '10px 12px', border: `1px solid ${t.border}` }}>
+                <div style={{ color: t.muted, fontSize: 11, fontWeight: 700, marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.8 }}>⬡ Polygon Vertices ({locModal.polygon?.length || 0})</div>
+                <div style={{ maxHeight: 140, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  {(locModal.polygon || []).map(([lat, lng], i) => (
+                    <div key={i} style={{ fontSize: 11, color: t.textSoft, fontFamily: 'monospace' }}>
+                      {i + 1}. {lat.toFixed(6)}, {lng.toFixed(6)}
+                    </div>
+                  ))}
+                </div>
+                <div style={{ fontSize: 11, color: t.muted, marginTop: 6 }}>Vertices are set by the polygon you drew on the map.</div>
+              </div>
+            ) : (
+              <>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                  <Inp label="Latitude" type="number" value={locModal.lat} onChange={e => setLocModal(p => ({ ...p, lat: Number(e.target.value) }))} step="0.000001" />
+                  <Inp label="Longitude" type="number" value={locModal.lng} onChange={e => setLocModal(p => ({ ...p, lng: Number(e.target.value) }))} step="0.000001" />
+                </div>
+                <Inp label="Detection Radius (metres)" type="number" value={locModal.radius} onChange={e => setLocModal(p => ({ ...p, radius: Number(e.target.value) }))} min={50} max={5000} />
+              </>
+            )}
             <div>
               <div style={{ color: t.muted, fontSize: 11, fontWeight: 700, marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.8 }}>Colour</div>
               <ColorPicker value={locModal.color} onChange={c => setLocModal(p => ({ ...p, color: c }))} />
