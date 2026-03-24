@@ -3258,60 +3258,42 @@ function buildPopupHtml(v, geoName) {
   </div>`;
 }
 
-// ── Camera overlay helpers ─────────────────────────────────────────────────
-
-
-function CameraFeed({ url, channel, expanded, onExpand, onShrink }) {
-  return (
-    <div style={{ position: 'relative', background: '#000', aspectRatio: '16/9', overflow: 'hidden' }}>
-      <iframe src={url} style={{ width: '100%', height: '100%', border: 'none' }} allowFullScreen title={`CH${channel}`} />
-      <div style={{ position: 'absolute', top: 4, left: 4, background: 'rgba(0,0,0,0.65)', borderRadius: 4, padding: '2px 7px', fontSize: 10, color: '#fff', fontWeight: 700, pointerEvents: 'none' }}>
-        CH {channel}
-      </div>
-      <button
-        onClick={expanded ? onShrink : onExpand}
-        style={{ position: 'absolute', top: 4, right: 4, background: 'rgba(0,0,0,0.65)', border: 'none', borderRadius: 4, color: '#fff', cursor: 'pointer', fontSize: 14, padding: '2px 5px', lineHeight: 1 }}>
-        {expanded ? '⊡' : '⤢'}
-      </button>
-    </div>
-  );
-}
+// ── Camera overlay ─────────────────────────────────────────────────────────
+// channel=6 on CMSV6's player shows all 6 cameras in its own native grid.
+// Individual channel buttons (1–5) switch to that single-camera view.
 
 function MapCameraOverlay({ panels, onClosePanel }) {
-  const [expandedState, setExpandedState] = useState({}); // devIdno → channel or null
+  // per-panel selected channel; default 6 = all cameras
+  const [selCh, setSelCh] = useState({});
 
   if (panels.length === 0) return null;
 
   return (
     <div style={{ position: 'fixed', bottom: 20, right: 20, zIndex: 9999, display: 'flex', flexDirection: 'column', gap: 12, maxHeight: '92vh', overflowY: 'auto', pointerEvents: 'none' }}>
       {panels.map(panel => {
-        const expandedCh = expandedState[panel.devIdno] || null;
+        const ch      = selCh[panel.devIdno] ?? 6;
+        const iframeUrl = panel.channelUrls[ch - 1];
         return (
-          <div key={panel.devIdno} style={{ background: '#111827', border: '1px solid #374151', borderRadius: 14, overflow: 'hidden', pointerEvents: 'all', boxShadow: '0 8px 32px rgba(0,0,0,0.6)', width: expandedCh ? 700 : 560 }}>
+          <div key={panel.devIdno} style={{ background: '#111827', border: '1px solid #374151', borderRadius: 14, overflow: 'hidden', pointerEvents: 'all', boxShadow: '0 8px 32px rgba(0,0,0,0.6)', width: 700 }}>
             {/* Title bar */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '9px 14px', background: '#1f2937', borderBottom: '1px solid #374151' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 12px', background: '#1f2937', borderBottom: '1px solid #374151' }}>
               <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#22c55e', boxShadow: '0 0 6px #22c55e', flexShrink: 0 }} />
-              <span style={{ color: '#fff', fontWeight: 800, fontSize: 15, flex: 1 }}>{panel.plate}</span>
-              <span style={{ color: '#9ca3af', fontSize: 11 }}>📷 {expandedCh ? `Channel ${expandedCh}` : '6 cameras'}</span>
-              <button onClick={() => setExpandedState(prev => ({ ...prev, [panel.devIdno]: null }))}
-                style={{ background: 'transparent', border: '1px solid #374151', borderRadius: 6, color: '#9ca3af', cursor: 'pointer', fontSize: 12, padding: '3px 8px', fontFamily: 'inherit' }}>
-                All
-              </button>
+              <span style={{ color: '#fff', fontWeight: 800, fontSize: 14, flex: 1 }}>{panel.plate}</span>
+              {/* Channel selector */}
+              {[6, 1, 2, 3, 4, 5].map(n => (
+                <button key={n} onClick={() => setSelCh(prev => ({ ...prev, [panel.devIdno]: n }))}
+                  style={{ background: ch === n ? '#6366f1' : '#374151', border: 'none', borderRadius: 6, color: '#fff', cursor: 'pointer', fontSize: 11, fontWeight: 700, padding: '4px 8px', fontFamily: 'inherit' }}>
+                  {n === 6 ? 'All' : `CH${n}`}
+                </button>
+              ))}
               <button onClick={() => onClosePanel(panel.devIdno)}
-                style={{ background: '#ef444422', border: '1px solid #ef444455', borderRadius: 6, color: '#ef4444', cursor: 'pointer', fontSize: 13, padding: '3px 8px', lineHeight: 1 }}>
+                style={{ background: '#ef444422', border: '1px solid #ef444455', borderRadius: 6, color: '#ef4444', cursor: 'pointer', fontSize: 13, padding: '3px 8px', lineHeight: 1, marginLeft: 4 }}>
                 ✕
               </button>
             </div>
-            {/* Camera grid */}
-            <div style={{ display: 'grid', gridTemplateColumns: expandedCh ? '1fr' : 'repeat(3, 1fr)', gap: 2, padding: 2, background: '#030712' }}>
-              {expandedCh
-                ? <CameraFeed key={expandedCh} url={panel.channelUrls[expandedCh - 1]} channel={expandedCh} expanded
-                    onShrink={() => setExpandedState(prev => ({ ...prev, [panel.devIdno]: null }))} />
-                : [1, 2, 3, 4, 5, 6].map(ch => (
-                    <CameraFeed key={ch} url={panel.channelUrls[ch - 1]} channel={ch}
-                      onExpand={() => setExpandedState(prev => ({ ...prev, [panel.devIdno]: ch }))} />
-                  ))
-              }
+            {/* Single iframe — ch6 = CMSV6 native all-camera grid, ch1–5 = single feed */}
+            <div style={{ background: '#000', aspectRatio: ch === 6 ? '16/9' : '16/9', position: 'relative' }}>
+              <iframe key={iframeUrl} src={iframeUrl} style={{ width: '100%', height: '100%', border: 'none', display: 'block', minHeight: ch === 6 ? 394 : 394 }} allowFullScreen title={`${panel.plate} CH${ch}`} />
             </div>
           </div>
         );
