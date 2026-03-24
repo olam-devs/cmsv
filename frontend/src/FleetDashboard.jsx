@@ -3199,6 +3199,208 @@ function Podium({ rankings }) {
   );
 }
 
+// ── View: Live Map ─────────────────────────────────────────────────────────
+
+const _geocodeCache = {};
+
+async function reverseGeocode(lat, lng) {
+  const key = `${lat.toFixed(3)},${lng.toFixed(3)}`;
+  if (_geocodeCache[key] !== undefined) return _geocodeCache[key];
+  try {
+    const res = await fetch(
+      `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=16&accept-language=en`
+    );
+    const d = await res.json();
+    const a = d.address || {};
+    const name = [
+      a.road || a.pedestrian || a.footway || a.highway,
+      a.suburb || a.neighbourhood || a.city_district || a.town || a.city || a.county,
+    ].filter(Boolean).join(', ') || (d.display_name || '').split(',').slice(0, 2).join(',').trim() || null;
+    _geocodeCache[key] = name;
+    return name;
+  } catch { return null; }
+}
+
+function buildMarkerIcon(v) {
+  const color = v.online === 1 ? '#22c55e' : v.online === 2 ? '#ef4444' : '#94a3b8';
+  return L.divIcon({
+    className: '',
+    html: `<div style="width:38px;height:38px;border-radius:50%;background:${color};border:3px solid #fff;
+      box-shadow:0 3px 10px rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;font-size:17px">🚌</div>`,
+    iconSize:    [38, 38],
+    iconAnchor:  [19, 19],
+    popupAnchor: [0, -22],
+  });
+}
+
+function buildPopupHtml(v, geoName) {
+  const statusText  = v.online === 1 ? 'Online' : v.online === 2 ? 'Alarm' : 'Offline';
+  const statusColor = v.online === 1 ? '#22c55e' : v.online === 2 ? '#ef4444' : '#94a3b8';
+  return `<div style="font-family:'DM Sans',system-ui,sans-serif;min-width:200px;padding:4px 2px">
+    <div style="font-weight:800;font-size:16px;margin-bottom:8px">${v.plate || v.devIdno}</div>
+    <div style="font-size:12px;color:#6b7280;margin-bottom:6px">
+      📍 ${geoName || '<i style="color:#9ca3af">Fetching location…</i>'}
+    </div>
+    <div style="display:flex;gap:14px;font-size:12px">
+      <span>🏎️ <b>${v.speed != null ? v.speed + ' km/h' : '—'}</b></span>
+      <span>🔑 <b style="color:${v.accOn ? '#22c55e' : '#94a3b8'}">ACC ${v.accOn ? 'ON' : 'OFF'}</b></span>
+    </div>
+    <div style="margin-top:8px;display:inline-block;background:${statusColor}22;color:${statusColor};
+      border-radius:6px;padding:2px 8px;font-size:11px;font-weight:700">${statusText}</div>
+    <div style="font-size:10px;color:#9ca3af;margin-top:6px">${v.lat?.toFixed(5)}, ${v.lng?.toFixed(5)}</div>
+  </div>`;
+}
+
+function LiveMapView({ vehicles }) {
+  const { t } = useTheme();
+  const mapRef         = useRef(null);
+  const mapInstanceRef = useRef(null);
+  const markersRef     = useRef({});   // devIdno → L.marker
+  const timerRefs      = useRef([]);   // geocode setTimeout ids
+  const [geoNames, setGeoNames] = useState({}); // devIdno → address string
+
+  // Init Leaflet map once on mount
+  useEffect(() => {
+    if (!mapRef.current) return;
+    const map = L.map(mapRef.current, { center: [-6.8, 39.28], zoom: 12 });
+    L.tileLayer('https://api.maptiler.com/maps/streets-v2/{z}/{x}/{y}.png?key=S4cAJJ9BRn9tH2FKnSNr', {
+      attribution: '© <a href="https://www.maptiler.com/">MapTiler</a> © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+      maxZoom: 19,
+    }).addTo(map);
+    mapInstanceRef.current = map;
+    return () => {
+      map.remove();
+      mapInstanceRef.current = null;
+      Object.keys(markersRef.current).forEach(k => delete markersRef.current[k]);
+    };
+  }, []);
+
+  // Place / update markers whenever vehicles list or geocode names change
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+
+    const valid = vehicles.filter(v => v.lat != null && v.lng != null && Math.abs(v.lat) > 0.001);
+    const validIds = new Set(valid.map(v => v.devIdno));
+
+    // Remove stale markers
+    for (const [id, marker] of Object.entries(markersRef.current)) {
+      if (!validIds.has(id)) { marker.remove(); delete markersRef.current[id]; }
+    }
+
+    const isFirstPlace = Object.keys(markersRef.current).length === 0 && valid.length > 0;
+
+    for (const v of valid) {
+      const geo   = geoNames[v.devIdno] || null;
+      const icon  = buildMarkerIcon(v);
+      const popup = buildPopupHtml(v, geo);
+
+      if (markersRef.current[v.devIdno]) {
+        markersRef.current[v.devIdno].setLatLng([v.lat, v.lng]);
+        markersRef.current[v.devIdno].setIcon(icon);
+        markersRef.current[v.devIdno].getPopup()?.setContent(popup);
+      } else {
+        markersRef.current[v.devIdno] = L.marker([v.lat, v.lng], { icon })
+          .addTo(map).bindPopup(popup);
+      }
+    }
+
+    if (isFirstPlace) {
+      try { map.fitBounds(L.latLngBounds(valid.map(v => [v.lat, v.lng])), { padding: [50, 50], maxZoom: 14 }); }
+      catch {}
+    }
+  }, [vehicles, geoNames]);
+
+  // Reverse-geocode vehicle positions (staggered 1.2 s to respect Nominatim rate limit)
+  useEffect(() => {
+    timerRefs.current.forEach(clearTimeout);
+    timerRefs.current = [];
+
+    const valid = vehicles.filter(v => v.lat != null && v.lng != null && Math.abs(v.lat) > 0.001);
+    let delay = 0;
+    for (const v of valid) {
+      const cacheKey = `${v.lat.toFixed(3)},${v.lng.toFixed(3)}`;
+      if (_geocodeCache[cacheKey] !== undefined) {
+        const cached = _geocodeCache[cacheKey];
+        if (cached) setGeoNames(prev => ({ ...prev, [v.devIdno]: cached }));
+      } else {
+        const { devIdno, lat, lng } = v;
+        const tid = setTimeout(async () => {
+          const name = await reverseGeocode(lat, lng);
+          if (name) setGeoNames(prev => ({ ...prev, [devIdno]: name }));
+        }, delay);
+        timerRefs.current.push(tid);
+        delay += 1200;
+      }
+    }
+    return () => timerRefs.current.forEach(clearTimeout);
+  }, [vehicles]);
+
+  const focusVehicle = (v) => {
+    if (!mapInstanceRef.current || !v.lat || Math.abs(v.lat) < 0.001) return;
+    mapInstanceRef.current.setView([v.lat, v.lng], 16);
+    markersRef.current[v.devIdno]?.openPopup();
+  };
+
+  const onlineCount  = vehicles.filter(v => v.online === 1).length;
+  const alarmCount   = vehicles.filter(v => v.online === 2).length;
+  const offlineCount = vehicles.filter(v => v.online === 0).length;
+
+  return (
+    <div style={{ display: 'flex', gap: 16, height: 'calc(100vh - 180px)', minHeight: 500 }}>
+      {/* Map */}
+      <div style={{ flex: 1, borderRadius: 16, overflow: 'hidden', border: `1px solid ${t.border}`, boxShadow: '0 2px 12px rgba(0,0,0,0.08)' }}>
+        <div ref={mapRef} style={{ width: '100%', height: '100%' }} />
+      </div>
+
+      {/* Sidebar */}
+      <div style={{ width: 300, display: 'flex', flexDirection: 'column', gap: 10, overflowY: 'auto' }}>
+        {/* Summary counts */}
+        <div style={{ display: 'flex', gap: 8 }}>
+          {[
+            { label: 'Online',  count: onlineCount,  color: t.green },
+            { label: 'Alarm',   count: alarmCount,   color: t.red   },
+            { label: 'Offline', count: offlineCount, color: t.muted },
+          ].map(({ label, count, color }) => (
+            <div key={label} style={{ flex: 1, background: `${color}18`, border: `1px solid ${color}44`, borderRadius: 12, padding: '10px 8px', textAlign: 'center' }}>
+              <div style={{ fontWeight: 800, fontSize: 20, color }}>{count}</div>
+              <div style={{ fontSize: 11, color: t.muted, fontWeight: 600 }}>{label}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* Vehicle list */}
+        <Panel title={`FLEET LOCATIONS (${vehicles.length})`} style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+          <div style={{ overflowY: 'auto', flex: 1 }}>
+            {vehicles.length === 0 ? <Empty icon="🗺️" text="No vehicles" /> : vehicles.map(v => {
+              const geo     = geoNames[v.devIdno];
+              const hasGPS  = v.lat != null && Math.abs(v.lat) > 0.001;
+              const statusColor = v.online === 1 ? t.green : v.online === 2 ? t.red : t.muted;
+              return (
+                <div key={v.devIdno}
+                  onClick={() => focusVehicle(v)}
+                  style={{ padding: '12px 16px', borderBottom: `1px solid ${t.border}`, cursor: hasGPS ? 'pointer' : 'default', transition: 'background 0.15s' }}
+                  onMouseEnter={e => { if (hasGPS) e.currentTarget.style.background = t.accentSoft; }}
+                  onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <div style={{ width: 9, height: 9, borderRadius: '50%', background: statusColor, flexShrink: 0,
+                      boxShadow: v.online === 1 ? `0 0 6px ${t.green}` : 'none' }} />
+                    <span style={{ fontWeight: 700, color: t.text, fontSize: 14, flex: 1 }}>{v.plate || v.devIdno}</span>
+                    {v.speed > 0 && <span style={{ color: t.accent, fontSize: 11, fontWeight: 700 }}>{v.speed} km/h</span>}
+                  </div>
+                  <div style={{ fontSize: 11, color: t.muted, marginTop: 4, paddingLeft: 17, lineHeight: 1.5 }}>
+                    {!hasGPS ? '⚠️ No GPS signal' : geo ? `📍 ${geo}` : '📍 Fetching location…'}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </Panel>
+      </div>
+    </div>
+  );
+}
+
 function RoutesView({ vehicles }) {
   const { t } = useTheme();
   const [tab, setTab] = useState('locations');
@@ -3777,6 +3979,7 @@ function RoutesView({ vehicles }) {
 const NAV = [
   { id: "dashboard",   icon: "◈",  label: "Dashboard"     },
   { id: "vehicles",    icon: "🚌", label: "Vehicles"      },
+  { id: "livemap",     icon: "📍", label: "Live Map"      },
   { id: "cameras",     icon: "📷", label: "Live Cameras"  },
   { id: "erp",         icon: "🏢", label: "Fleet Settings"     },
   { id: "alarms",      icon: "⚡", label: "Alarms"        },
@@ -4174,6 +4377,7 @@ function FleetDashboardContent() {
               onRetry={() => { vehiclesFetched.current = false; fetchVehicles(); }}
               onSelect={setSelectedVehicle} erpSummary={erpSummary} />
           )}
+          {view === "livemap"     && <LiveMapView vehicles={filteredVehicles} />}
           {view === "alarms" && (
             <AlarmsView alarms={alarms} loading={alarmLoading} error={alarmError}
               onRetry={() => { alarmsFetched.current = false; fetchAlarms(); }} />
