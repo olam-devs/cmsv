@@ -3263,23 +3263,65 @@ function buildPopupHtml(v, geoName) {
 // Individual channel buttons (1–5) switch to that single-camera view.
 
 function MapCameraOverlay({ panels, onClosePanel }) {
-  // per-panel selected channel; default 6 = all cameras
-  const [selCh, setSelCh] = useState({});
+  const [selCh,     setSelCh]     = useState({});   // devIdno → active channel (default 6)
+  const [positions, setPositions] = useState({});   // devIdno → { x, y }
+  const dragRef = useRef(null); // { devIdno, startX, startY, origX, origY }
+
+  // Global mouse move / up handlers for drag
+  useEffect(() => {
+    const onMove = (e) => {
+      if (!dragRef.current) return;
+      const { devIdno, startX, startY, origX, origY } = dragRef.current;
+      setPositions(prev => ({
+        ...prev,
+        [devIdno]: { x: origX + e.clientX - startX, y: origY + e.clientY - startY },
+      }));
+    };
+    const onUp = () => { dragRef.current = null; };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup',   onUp);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup',   onUp);
+    };
+  }, []);
+
+  const startDrag = (e, devIdno, index) => {
+    if (e.target.tagName === 'BUTTON') return; // don't drag on button clicks
+    const pos = positions[devIdno] ?? {
+      x: window.innerWidth  - 720 - 20,
+      y: window.innerHeight - 450 - 20 - index * 30,
+    };
+    dragRef.current = { devIdno, startX: e.clientX, startY: e.clientY, origX: pos.x, origY: pos.y };
+    e.preventDefault();
+  };
 
   if (panels.length === 0) return null;
 
   return (
-    <div style={{ position: 'fixed', bottom: 20, right: 20, zIndex: 9999, display: 'flex', flexDirection: 'column', gap: 12, maxHeight: '92vh', overflowY: 'auto', pointerEvents: 'none' }}>
-      {panels.map(panel => {
-        const ch      = selCh[panel.devIdno] ?? 6;
-        const iframeUrl = panel.channelUrls[ch - 1];
+    <>
+      {panels.map((panel, index) => {
+        const ch  = selCh[panel.devIdno] ?? 6;
+        const url = panel.channelUrls[ch - 1];
+        const pos = positions[panel.devIdno] ?? {
+          x: window.innerWidth  - 720 - 20,
+          y: window.innerHeight - 450 - 20 - index * 30,
+        };
         return (
-          <div key={panel.devIdno} style={{ background: '#111827', border: '1px solid #374151', borderRadius: 14, overflow: 'hidden', pointerEvents: 'all', boxShadow: '0 8px 32px rgba(0,0,0,0.6)', width: 700 }}>
-            {/* Title bar */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 12px', background: '#1f2937', borderBottom: '1px solid #374151' }}>
+          <div key={panel.devIdno} style={{
+            position: 'fixed', left: pos.x, top: pos.y, zIndex: 9999 + index,
+            width: 700, background: '#111827', border: '1px solid #374151',
+            borderRadius: 14, overflow: 'hidden',
+            boxShadow: '0 8px 32px rgba(0,0,0,0.6)',
+            userSelect: 'none',
+          }}>
+            {/* Drag handle / title bar */}
+            <div
+              onMouseDown={e => startDrag(e, panel.devIdno, index)}
+              style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 12px', background: '#1f2937', borderBottom: '1px solid #374151', cursor: 'grab' }}>
+              <span style={{ color: '#6b7280', fontSize: 13, marginRight: 2, pointerEvents: 'none' }}>⠿</span>
               <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#22c55e', boxShadow: '0 0 6px #22c55e', flexShrink: 0 }} />
-              <span style={{ color: '#fff', fontWeight: 800, fontSize: 14, flex: 1 }}>{panel.plate}</span>
-              {/* Channel selector */}
+              <span style={{ color: '#fff', fontWeight: 800, fontSize: 14, flex: 1, pointerEvents: 'none' }}>{panel.plate}</span>
               {[6, 1, 2, 3, 4, 5].map(n => (
                 <button key={n} onClick={() => setSelCh(prev => ({ ...prev, [panel.devIdno]: n }))}
                   style={{ background: ch === n ? '#6366f1' : '#374151', border: 'none', borderRadius: 6, color: '#fff', cursor: 'pointer', fontSize: 11, fontWeight: 700, padding: '4px 8px', fontFamily: 'inherit' }}>
@@ -3291,14 +3333,14 @@ function MapCameraOverlay({ panels, onClosePanel }) {
                 ✕
               </button>
             </div>
-            {/* Single iframe — ch6 = CMSV6 native all-camera grid, ch1–5 = single feed */}
-            <div style={{ background: '#000', aspectRatio: ch === 6 ? '16/9' : '16/9', position: 'relative' }}>
-              <iframe key={iframeUrl} src={iframeUrl} style={{ width: '100%', height: '100%', border: 'none', display: 'block', minHeight: ch === 6 ? 394 : 394 }} allowFullScreen title={`${panel.plate} CH${ch}`} />
+            {/* Video */}
+            <div style={{ background: '#000' }}>
+              <iframe key={url} src={url} style={{ width: '100%', height: 394, border: 'none', display: 'block' }} allowFullScreen title={`${panel.plate} CH${ch}`} />
             </div>
           </div>
         );
       })}
-    </div>
+    </>
   );
 }
 
