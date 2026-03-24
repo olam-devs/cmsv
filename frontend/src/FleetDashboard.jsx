@@ -3438,7 +3438,12 @@ function LiveMapView() {
       if (btn) btn.onclick = () => openStreamRef.current?.(btn.dataset.streamId);
     });
 
+    // Invalidate size on window resize (also fires after sidebar transition)
+    const onResize = () => map.invalidateSize();
+    window.addEventListener('resize', onResize);
+
     return () => {
+      window.removeEventListener('resize', onResize);
       map.remove();
       mapInstanceRef.current = null;
       clusterRef.current = null;
@@ -4511,7 +4516,7 @@ function FleetDashboardContent() {
               </div>
             </div>
           )}
-          <button onClick={() => setSidebarOpen(p => !p)} style={{
+          <button onClick={() => { setSidebarOpen(p => !p); setTimeout(() => window.dispatchEvent(new Event('resize')), 220); }} style={{
             width: "100%", padding: "10px 0", background: "transparent", border: "none",
             color: t.muted, cursor: "pointer", fontSize: 18, display: "flex", alignItems: "center", justifyContent: "center",
             borderTop: sidebarOpen ? `1px solid ${t.border}` : "none",
@@ -4595,7 +4600,7 @@ function FleetDashboardContent() {
         </div>
 
         {/* Views */}
-        <div style={{ padding: "0 28px 32px" }}>
+        <div style={{ padding: view === "livemap" ? "0" : "0 28px 32px" }}>
           {view === "dashboard" && (
             snapLoading ? <Spinner label="Fetching live fleet data…" /> :
             snapError   ? <ErrorBanner message={snapError} onRetry={fetchSnapshot} /> :
