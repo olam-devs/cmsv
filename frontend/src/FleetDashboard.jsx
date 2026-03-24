@@ -3251,13 +3251,38 @@ function buildPopupHtml(v, geoName) {
   </div>`;
 }
 
-function LiveMapView({ vehicles }) {
+function LiveMapView() {
   const { t } = useTheme();
+
+  // Own live data — fetched fresh every 15 s
+  const [vehicles, setVehicles] = useState([]);
+  const [loading,  setLoading]  = useState(true);
+  const [error,    setError]    = useState(null);
+
+  const fetchLive = useCallback(async () => {
+    try {
+      const data = await apiFetch('/fleet/vehicles');
+      setVehicles(Array.isArray(data) ? data : []);
+      setError(null);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchLive();
+    const iv = setInterval(fetchLive, 15000);
+    return () => clearInterval(iv);
+  }, [fetchLive]);
+
   const mapRef         = useRef(null);
   const mapInstanceRef = useRef(null);
-  const markersRef     = useRef({});   // devIdno → L.marker
-  const timerRefs      = useRef([]);   // geocode setTimeout ids
-  const [geoNames, setGeoNames] = useState({}); // devIdno → address string
+  const markersRef     = useRef({});
+  const timerRefs      = useRef([]);
+  const fittedRef      = useRef(false);
+  const [geoNames, setGeoNames] = useState({});
 
   // Init Leaflet map once on mount
   useEffect(() => {
@@ -3272,10 +3297,11 @@ function LiveMapView({ vehicles }) {
       map.remove();
       mapInstanceRef.current = null;
       Object.keys(markersRef.current).forEach(k => delete markersRef.current[k]);
+      fittedRef.current = false;
     };
   }, []);
 
-  // Place / update markers whenever vehicles list or geocode names change
+  // Place / update markers whenever vehicles or geocode names change
   useEffect(() => {
     const map = mapInstanceRef.current;
     if (!map) return;
@@ -3283,12 +3309,9 @@ function LiveMapView({ vehicles }) {
     const valid = vehicles.filter(v => v.lat != null && v.lng != null && Math.abs(v.lat) > 0.001);
     const validIds = new Set(valid.map(v => v.devIdno));
 
-    // Remove stale markers
     for (const [id, marker] of Object.entries(markersRef.current)) {
       if (!validIds.has(id)) { marker.remove(); delete markersRef.current[id]; }
     }
-
-    const isFirstPlace = Object.keys(markersRef.current).length === 0 && valid.length > 0;
 
     for (const v of valid) {
       const geo   = geoNames[v.devIdno] || null;
@@ -3305,13 +3328,15 @@ function LiveMapView({ vehicles }) {
       }
     }
 
-    if (isFirstPlace) {
+    // Fit bounds once after first real data arrives
+    if (!fittedRef.current && valid.length > 0) {
+      fittedRef.current = true;
       try { map.fitBounds(L.latLngBounds(valid.map(v => [v.lat, v.lng])), { padding: [50, 50], maxZoom: 14 }); }
       catch {}
     }
   }, [vehicles, geoNames]);
 
-  // Reverse-geocode vehicle positions (staggered 1.2 s to respect Nominatim rate limit)
+  // Staggered reverse-geocoding (1.2 s apart — Nominatim limit is 1 req/s)
   useEffect(() => {
     timerRefs.current.forEach(clearTimeout);
     timerRefs.current = [];
@@ -3345,16 +3370,31 @@ function LiveMapView({ vehicles }) {
   const onlineCount  = vehicles.filter(v => v.online === 1).length;
   const alarmCount   = vehicles.filter(v => v.online === 2).length;
   const offlineCount = vehicles.filter(v => v.online === 0).length;
+  const gpsCount     = vehicles.filter(v => v.lat != null && Math.abs(v.lat) > 0.001).length;
 
   return (
     <div style={{ display: 'flex', gap: 16, height: 'calc(100vh - 180px)', minHeight: 500 }}>
       {/* Map */}
-      <div style={{ flex: 1, borderRadius: 16, overflow: 'hidden', border: `1px solid ${t.border}`, boxShadow: '0 2px 12px rgba(0,0,0,0.08)' }}>
+      <div style={{ flex: 1, borderRadius: 16, overflow: 'hidden', border: `1px solid ${t.border}`, boxShadow: '0 2px 12px rgba(0,0,0,0.08)', position: 'relative' }}>
         <div ref={mapRef} style={{ width: '100%', height: '100%' }} />
+        {loading && (
+          <div style={{ position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)',
+            background: t.panel, border: `1px solid ${t.border}`, borderRadius: 10, padding: '8px 16px',
+            fontSize: 13, color: t.textSoft, zIndex: 1000 }}>
+            Fetching vehicle positions…
+          </div>
+        )}
+        {error && (
+          <div style={{ position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)',
+            background: t.redSoft, border: `1px solid ${t.red}`, borderRadius: 10, padding: '8px 16px',
+            fontSize: 13, color: t.red, zIndex: 1000 }}>
+            {error}
+          </div>
+        )}
       </div>
 
       {/* Sidebar */}
-      <div style={{ width: 300, display: 'flex', flexDirection: 'column', gap: 10, overflowY: 'auto' }}>
+      <div style={{ width: 300, display: 'flex', flexDirection: 'column', gap: 10 }}>
         {/* Summary counts */}
         <div style={{ display: 'flex', gap: 8 }}>
           {[
@@ -3368,32 +3408,42 @@ function LiveMapView({ vehicles }) {
             </div>
           ))}
         </div>
+        {vehicles.length > 0 && gpsCount < vehicles.length && (
+          <div style={{ fontSize: 11, color: t.muted, textAlign: 'center' }}>
+            {gpsCount}/{vehicles.length} vehicles have GPS signal
+          </div>
+        )}
 
         {/* Vehicle list */}
         <Panel title={`FLEET LOCATIONS (${vehicles.length})`} style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
           <div style={{ overflowY: 'auto', flex: 1 }}>
-            {vehicles.length === 0 ? <Empty icon="🗺️" text="No vehicles" /> : vehicles.map(v => {
-              const geo     = geoNames[v.devIdno];
-              const hasGPS  = v.lat != null && Math.abs(v.lat) > 0.001;
-              const statusColor = v.online === 1 ? t.green : v.online === 2 ? t.red : t.muted;
-              return (
-                <div key={v.devIdno}
-                  onClick={() => focusVehicle(v)}
-                  style={{ padding: '12px 16px', borderBottom: `1px solid ${t.border}`, cursor: hasGPS ? 'pointer' : 'default', transition: 'background 0.15s' }}
-                  onMouseEnter={e => { if (hasGPS) e.currentTarget.style.background = t.accentSoft; }}
-                  onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <div style={{ width: 9, height: 9, borderRadius: '50%', background: statusColor, flexShrink: 0,
-                      boxShadow: v.online === 1 ? `0 0 6px ${t.green}` : 'none' }} />
-                    <span style={{ fontWeight: 700, color: t.text, fontSize: 14, flex: 1 }}>{v.plate || v.devIdno}</span>
-                    {v.speed > 0 && <span style={{ color: t.accent, fontSize: 11, fontWeight: 700 }}>{v.speed} km/h</span>}
-                  </div>
-                  <div style={{ fontSize: 11, color: t.muted, marginTop: 4, paddingLeft: 17, lineHeight: 1.5 }}>
-                    {!hasGPS ? '⚠️ No GPS signal' : geo ? `📍 ${geo}` : '📍 Fetching location…'}
-                  </div>
-                </div>
-              );
-            })}
+            {loading && vehicles.length === 0
+              ? <div style={{ padding: 20, color: t.muted, fontSize: 13, textAlign: 'center' }}>Loading…</div>
+              : vehicles.length === 0
+                ? <Empty icon="🗺️" text="No vehicles found" />
+                : vehicles.map(v => {
+                    const geo      = geoNames[v.devIdno];
+                    const hasGPS   = v.lat != null && Math.abs(v.lat) > 0.001;
+                    const statusColor = v.online === 1 ? t.green : v.online === 2 ? t.red : t.muted;
+                    return (
+                      <div key={v.devIdno}
+                        onClick={() => focusVehicle(v)}
+                        style={{ padding: '12px 16px', borderBottom: `1px solid ${t.border}`, cursor: hasGPS ? 'pointer' : 'default', transition: 'background 0.15s' }}
+                        onMouseEnter={e => { if (hasGPS) e.currentTarget.style.background = t.accentSoft; }}
+                        onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <div style={{ width: 9, height: 9, borderRadius: '50%', background: statusColor, flexShrink: 0,
+                            boxShadow: v.online === 1 ? `0 0 6px ${t.green}` : 'none' }} />
+                          <span style={{ fontWeight: 700, color: t.text, fontSize: 14, flex: 1 }}>{v.plate || v.devIdno}</span>
+                          {v.speed > 0 && <span style={{ color: t.accent, fontSize: 11, fontWeight: 700 }}>{v.speed} km/h</span>}
+                        </div>
+                        <div style={{ fontSize: 11, color: t.muted, marginTop: 4, paddingLeft: 17, lineHeight: 1.5 }}>
+                          {!hasGPS ? '⚠️ No GPS signal' : geo ? `📍 ${geo}` : '📍 Fetching location…'}
+                        </div>
+                      </div>
+                    );
+                  })
+            }
           </div>
         </Panel>
       </div>
@@ -4377,7 +4427,7 @@ function FleetDashboardContent() {
               onRetry={() => { vehiclesFetched.current = false; fetchVehicles(); }}
               onSelect={setSelectedVehicle} erpSummary={erpSummary} />
           )}
-          {view === "livemap"     && <LiveMapView vehicles={filteredVehicles} />}
+          {view === "livemap"     && <LiveMapView />}
           {view === "alarms" && (
             <AlarmsView alarms={alarms} loading={alarmLoading} error={alarmError}
               onRetry={() => { alarmsFetched.current = false; fetchAlarms(); }} />
