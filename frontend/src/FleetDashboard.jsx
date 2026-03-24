@@ -3260,9 +3260,6 @@ function buildPopupHtml(v, geoName) {
 
 // ── Camera overlay helpers ─────────────────────────────────────────────────
 
-function buildChannelUrl(baseUrl, channel) {
-  return baseUrl.replace(/channel=\d+/, `channel=${channel}`);
-}
 
 function CameraFeed({ url, channel, expanded, onExpand, onShrink }) {
   return (
@@ -3308,10 +3305,10 @@ function MapCameraOverlay({ panels, onClosePanel }) {
             {/* Camera grid */}
             <div style={{ display: 'grid', gridTemplateColumns: expandedCh ? '1fr' : 'repeat(3, 1fr)', gap: 2, padding: 2, background: '#030712' }}>
               {expandedCh
-                ? <CameraFeed key={expandedCh} url={buildChannelUrl(panel.baseUrl, expandedCh)} channel={expandedCh} expanded
+                ? <CameraFeed key={expandedCh} url={panel.channelUrls[expandedCh - 1]} channel={expandedCh} expanded
                     onShrink={() => setExpandedState(prev => ({ ...prev, [panel.devIdno]: null }))} />
                 : [1, 2, 3, 4, 5, 6].map(ch => (
-                    <CameraFeed key={ch} url={buildChannelUrl(panel.baseUrl, ch)} channel={ch}
+                    <CameraFeed key={ch} url={panel.channelUrls[ch - 1]} channel={ch}
                       onExpand={() => setExpandedState(prev => ({ ...prev, [panel.devIdno]: ch }))} />
                   ))
               }
@@ -3362,6 +3359,7 @@ function LiveMapView() {
   const [geoNames,      setGeoNames]      = useState({});
   const [streamPanels,  setStreamPanels]  = useState([]);
   const [rightOpen,     setRightOpen]     = useState(true);
+  const [fullscreen,    setFullscreen]    = useState(false);
 
   // Keep vehiclesRef in sync for stream callback
   useEffect(() => { vehiclesRef.current = vehicles; }, [vehicles]);
@@ -3373,8 +3371,14 @@ function LiveMapView() {
       const v = vehiclesRef.current.find(v => v.devIdno === devIdno);
       if (!v) return;
       try {
-        const data = await apiFetch(`/cameras/${devIdno}/stream?channel=1`);
-        setStreamPanels(prev => [...prev, { devIdno, plate: v.plate || devIdno, baseUrl: data.playerUrl }]);
+        // Fetch each channel's URL individually — CMSV6 channel=N means "show N channels"
+        // so we must not reuse the same URL with a replaced channel number
+        const channelUrls = await Promise.all(
+          [1, 2, 3, 4, 5, 6].map(ch =>
+            apiFetch(`/cameras/${devIdno}/stream?channel=${ch}`).then(d => d.playerUrl)
+          )
+        );
+        setStreamPanels(prev => [...prev, { devIdno, plate: v.plate || devIdno, channelUrls }]);
       } catch {}
     };
   }, [streamPanels]);
@@ -3488,9 +3492,11 @@ function LiveMapView() {
   const gpsCount     = vehicles.filter(v => v.lat != null && Math.abs(v.lat) > 0.001).length;
 
   return (
-    <div style={{ display: 'flex', gap: 0, height: 'calc(100vh - 180px)', minHeight: 500, position: 'relative' }}>
+    <div style={fullscreen
+      ? { position: 'fixed', inset: 0, zIndex: 800, display: 'flex', gap: 0, background: '#000' }
+      : { display: 'flex', gap: 0, height: 'calc(100vh - 180px)', minHeight: 500, position: 'relative' }}>
       {/* Map */}
-      <div style={{ flex: 1, borderRadius: rightOpen ? '16px 0 0 16px' : 16, overflow: 'hidden', border: `1px solid ${t.border}`, boxShadow: '0 2px 12px rgba(0,0,0,0.08)', position: 'relative', transition: 'border-radius 0.2s' }}>
+      <div style={{ flex: 1, borderRadius: fullscreen ? 0 : (rightOpen ? '16px 0 0 16px' : 16), overflow: 'hidden', border: fullscreen ? 'none' : `1px solid ${t.border}`, boxShadow: fullscreen ? 'none' : '0 2px 12px rgba(0,0,0,0.08)', position: 'relative', transition: 'border-radius 0.2s' }}>
         <div ref={mapRef} style={{ width: '100%', height: '100%' }} />
         {loading && (
           <div style={{ position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)', background: t.panel, border: `1px solid ${t.border}`, borderRadius: 10, padding: '8px 16px', fontSize: 13, color: t.textSoft, zIndex: 1000 }}>
@@ -3502,15 +3508,25 @@ function LiveMapView() {
             {error}
           </div>
         )}
-        {/* Right sidebar toggle button on map edge */}
-        <button onClick={() => setRightOpen(p => !p)} style={{
-          position: 'absolute', right: 0, top: '50%', transform: 'translateY(-50%)',
-          zIndex: 1000, background: t.accent, border: 'none', borderRadius: '8px 0 0 8px',
-          color: '#fff', cursor: 'pointer', padding: '10px 5px', fontSize: 12, lineHeight: 1,
-          boxShadow: '-2px 0 8px rgba(0,0,0,0.15)',
+        {/* Fullscreen toggle */}
+        <button onClick={() => setFullscreen(p => !p)} title={fullscreen ? 'Exit fullscreen' : 'Fullscreen'} style={{
+          position: 'absolute', top: 12, left: 12, zIndex: 1000,
+          background: 'rgba(0,0,0,0.65)', border: 'none', borderRadius: 8,
+          color: '#fff', cursor: 'pointer', padding: '7px 10px', fontSize: 16, lineHeight: 1,
         }}>
-          {rightOpen ? '▶' : '◀'}
+          {fullscreen ? '⊡' : '⛶'}
         </button>
+        {/* Right sidebar toggle */}
+        {!fullscreen && (
+          <button onClick={() => setRightOpen(p => !p)} style={{
+            position: 'absolute', right: 0, top: '50%', transform: 'translateY(-50%)',
+            zIndex: 1000, background: t.accent, border: 'none', borderRadius: '8px 0 0 8px',
+            color: '#fff', cursor: 'pointer', padding: '10px 5px', fontSize: 12, lineHeight: 1,
+            boxShadow: '-2px 0 8px rgba(0,0,0,0.15)',
+          }}>
+            {rightOpen ? '▶' : '◀'}
+          </button>
+        )}
       </div>
 
       {/* Right Sidebar */}
