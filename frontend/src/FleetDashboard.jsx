@@ -1,6 +1,9 @@
 import { useState, useEffect, useCallback, useRef, createContext, useContext } from "react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
+import "leaflet.markercluster/dist/MarkerCluster.css";
+import "leaflet.markercluster/dist/MarkerCluster.Default.css";
+import "leaflet.markercluster";
 // Fix Leaflet default icon paths broken by bundlers
 delete L.Icon.Default.prototype._getIconUrl;
 L.Icon.Default.mergeOptions({
@@ -3236,7 +3239,10 @@ function buildMarkerIcon(v) {
 function buildPopupHtml(v, geoName) {
   const statusText  = v.online === 1 ? 'Online' : v.online === 2 ? 'Alarm' : 'Offline';
   const statusColor = v.online === 1 ? '#22c55e' : v.online === 2 ? '#ef4444' : '#94a3b8';
-  return `<div style="font-family:'DM Sans',system-ui,sans-serif;min-width:200px;padding:4px 2px">
+  const streamBtn   = (v.online === 1 || v.online === 2)
+    ? `<button data-stream-id="${v.devIdno}" style="margin-top:10px;width:100%;padding:8px 0;background:#6366f1;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:13px;font-weight:700;font-family:inherit;display:flex;align-items:center;justify-content:center;gap:6px">📷 Live Cameras</button>`
+    : '';
+  return `<div style="font-family:'DM Sans',system-ui,sans-serif;min-width:210px;padding:4px 2px">
     <div style="font-weight:800;font-size:16px;margin-bottom:8px">${v.plate || v.devIdno}</div>
     <div style="font-size:12px;color:#6b7280;margin-bottom:6px">
       📍 ${geoName || '<i style="color:#9ca3af">Fetching location…</i>'}
@@ -3248,8 +3254,76 @@ function buildPopupHtml(v, geoName) {
     <div style="margin-top:8px;display:inline-block;background:${statusColor}22;color:${statusColor};
       border-radius:6px;padding:2px 8px;font-size:11px;font-weight:700">${statusText}</div>
     <div style="font-size:10px;color:#9ca3af;margin-top:6px">${v.lat?.toFixed(5)}, ${v.lng?.toFixed(5)}</div>
+    ${streamBtn}
   </div>`;
 }
+
+// ── Camera overlay helpers ─────────────────────────────────────────────────
+
+function buildChannelUrl(baseUrl, channel) {
+  return baseUrl.replace(/channel=\d+/, `channel=${channel}`);
+}
+
+function CameraFeed({ url, channel, expanded, onExpand, onShrink }) {
+  return (
+    <div style={{ position: 'relative', background: '#000', aspectRatio: '16/9', overflow: 'hidden' }}>
+      <iframe src={url} style={{ width: '100%', height: '100%', border: 'none' }} allowFullScreen title={`CH${channel}`} />
+      <div style={{ position: 'absolute', top: 4, left: 4, background: 'rgba(0,0,0,0.65)', borderRadius: 4, padding: '2px 7px', fontSize: 10, color: '#fff', fontWeight: 700, pointerEvents: 'none' }}>
+        CH {channel}
+      </div>
+      <button
+        onClick={expanded ? onShrink : onExpand}
+        style={{ position: 'absolute', top: 4, right: 4, background: 'rgba(0,0,0,0.65)', border: 'none', borderRadius: 4, color: '#fff', cursor: 'pointer', fontSize: 14, padding: '2px 5px', lineHeight: 1 }}>
+        {expanded ? '⊡' : '⤢'}
+      </button>
+    </div>
+  );
+}
+
+function MapCameraOverlay({ panels, onClosePanel }) {
+  const [expandedState, setExpandedState] = useState({}); // devIdno → channel or null
+
+  if (panels.length === 0) return null;
+
+  return (
+    <div style={{ position: 'fixed', bottom: 20, right: 20, zIndex: 9999, display: 'flex', flexDirection: 'column', gap: 12, maxHeight: '92vh', overflowY: 'auto', pointerEvents: 'none' }}>
+      {panels.map(panel => {
+        const expandedCh = expandedState[panel.devIdno] || null;
+        return (
+          <div key={panel.devIdno} style={{ background: '#111827', border: '1px solid #374151', borderRadius: 14, overflow: 'hidden', pointerEvents: 'all', boxShadow: '0 8px 32px rgba(0,0,0,0.6)', width: expandedCh ? 700 : 560 }}>
+            {/* Title bar */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '9px 14px', background: '#1f2937', borderBottom: '1px solid #374151' }}>
+              <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#22c55e', boxShadow: '0 0 6px #22c55e', flexShrink: 0 }} />
+              <span style={{ color: '#fff', fontWeight: 800, fontSize: 15, flex: 1 }}>{panel.plate}</span>
+              <span style={{ color: '#9ca3af', fontSize: 11 }}>📷 {expandedCh ? `Channel ${expandedCh}` : '6 cameras'}</span>
+              <button onClick={() => setExpandedState(prev => ({ ...prev, [panel.devIdno]: null }))}
+                style={{ background: 'transparent', border: '1px solid #374151', borderRadius: 6, color: '#9ca3af', cursor: 'pointer', fontSize: 12, padding: '3px 8px', fontFamily: 'inherit' }}>
+                All
+              </button>
+              <button onClick={() => onClosePanel(panel.devIdno)}
+                style={{ background: '#ef444422', border: '1px solid #ef444455', borderRadius: 6, color: '#ef4444', cursor: 'pointer', fontSize: 13, padding: '3px 8px', lineHeight: 1 }}>
+                ✕
+              </button>
+            </div>
+            {/* Camera grid */}
+            <div style={{ display: 'grid', gridTemplateColumns: expandedCh ? '1fr' : 'repeat(3, 1fr)', gap: 2, padding: 2, background: '#030712' }}>
+              {expandedCh
+                ? <CameraFeed key={expandedCh} url={buildChannelUrl(panel.baseUrl, expandedCh)} channel={expandedCh} expanded
+                    onShrink={() => setExpandedState(prev => ({ ...prev, [panel.devIdno]: null }))} />
+                : [1, 2, 3, 4, 5, 6].map(ch => (
+                    <CameraFeed key={ch} url={buildChannelUrl(panel.baseUrl, ch)} channel={ch}
+                      onExpand={() => setExpandedState(prev => ({ ...prev, [panel.devIdno]: ch }))} />
+                  ))
+              }
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── Live Map view ──────────────────────────────────────────────────────────
 
 function LiveMapView() {
   const { t } = useTheme();
@@ -3277,14 +3351,35 @@ function LiveMapView() {
     return () => clearInterval(iv);
   }, [fetchLive]);
 
-  const mapRef         = useRef(null);
-  const mapInstanceRef = useRef(null);
-  const markersRef     = useRef({});
-  const timerRefs      = useRef([]);
-  const fittedRef      = useRef(false);
-  const [geoNames, setGeoNames] = useState({});
+  const mapRef          = useRef(null);
+  const mapInstanceRef  = useRef(null);
+  const clusterRef      = useRef(null);
+  const markersRef      = useRef({});
+  const timerRefs       = useRef([]);
+  const fittedRef       = useRef(false);
+  const vehiclesRef     = useRef([]);
+  const openStreamRef   = useRef(null);
+  const [geoNames,      setGeoNames]      = useState({});
+  const [streamPanels,  setStreamPanels]  = useState([]);
+  const [rightOpen,     setRightOpen]     = useState(true);
 
-  // Init Leaflet map once on mount
+  // Keep vehiclesRef in sync for stream callback
+  useEffect(() => { vehiclesRef.current = vehicles; }, [vehicles]);
+
+  // Stream opener — stored in ref so Leaflet popup events always see latest
+  useEffect(() => {
+    openStreamRef.current = async (devIdno) => {
+      if (streamPanels.find(p => p.devIdno === devIdno)) return;
+      const v = vehiclesRef.current.find(v => v.devIdno === devIdno);
+      if (!v) return;
+      try {
+        const data = await apiFetch(`/cameras/${devIdno}/stream?channel=1`);
+        setStreamPanels(prev => [...prev, { devIdno, plate: v.plate || devIdno, baseUrl: data.playerUrl }]);
+      } catch {}
+    };
+  }, [streamPanels]);
+
+  // Init Leaflet map + cluster group once
   useEffect(() => {
     if (!mapRef.current) return;
     const map = L.map(mapRef.current, { center: [-6.8, 39.28], zoom: 12 });
@@ -3292,55 +3387,75 @@ function LiveMapView() {
       attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
       maxZoom: 19,
     }).addTo(map);
+
+    // Marker cluster group
+    const cluster = L.markerClusterGroup({
+      maxClusterRadius: 60,
+      iconCreateFunction: (grp) => {
+        const n = grp.getChildCount();
+        return L.divIcon({
+          className: '',
+          html: `<div style="width:38px;height:38px;border-radius:50%;background:#6366f1;color:#fff;border:3px solid #fff;box-shadow:0 3px 10px rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:14px">${n}</div>`,
+          iconSize: [38, 38], iconAnchor: [19, 19],
+        });
+      },
+    });
+    map.addLayer(cluster);
+    clusterRef.current = cluster;
     mapInstanceRef.current = map;
+
+    // Wire up stream button clicks via event delegation on popup open
+    map.on('popupopen', (e) => {
+      const btn = e.popup.getElement()?.querySelector('[data-stream-id]');
+      if (btn) btn.onclick = () => openStreamRef.current?.(btn.dataset.streamId);
+    });
+
     return () => {
       map.remove();
       mapInstanceRef.current = null;
+      clusterRef.current = null;
       Object.keys(markersRef.current).forEach(k => delete markersRef.current[k]);
       fittedRef.current = false;
     };
   }, []);
 
-  // Place / update markers whenever vehicles or geocode names change
+  // Place / update markers
   useEffect(() => {
-    const map = mapInstanceRef.current;
-    if (!map) return;
-
-    const valid = vehicles.filter(v => v.lat != null && v.lng != null && Math.abs(v.lat) > 0.001);
+    const cluster = clusterRef.current;
+    if (!cluster) return;
+    const valid    = vehicles.filter(v => v.lat != null && v.lng != null && Math.abs(v.lat) > 0.001);
     const validIds = new Set(valid.map(v => v.devIdno));
 
     for (const [id, marker] of Object.entries(markersRef.current)) {
-      if (!validIds.has(id)) { marker.remove(); delete markersRef.current[id]; }
+      if (!validIds.has(id)) { cluster.removeLayer(marker); delete markersRef.current[id]; }
     }
 
     for (const v of valid) {
       const geo   = geoNames[v.devIdno] || null;
       const icon  = buildMarkerIcon(v);
       const popup = buildPopupHtml(v, geo);
-
       if (markersRef.current[v.devIdno]) {
         markersRef.current[v.devIdno].setLatLng([v.lat, v.lng]);
         markersRef.current[v.devIdno].setIcon(icon);
         markersRef.current[v.devIdno].getPopup()?.setContent(popup);
       } else {
-        markersRef.current[v.devIdno] = L.marker([v.lat, v.lng], { icon })
-          .addTo(map).bindPopup(popup);
+        const m = L.marker([v.lat, v.lng], { icon }).bindPopup(popup);
+        cluster.addLayer(m);
+        markersRef.current[v.devIdno] = m;
       }
     }
 
-    // Fit bounds once after first real data arrives
-    if (!fittedRef.current && valid.length > 0) {
+    if (!fittedRef.current && valid.length > 0 && mapInstanceRef.current) {
       fittedRef.current = true;
-      try { map.fitBounds(L.latLngBounds(valid.map(v => [v.lat, v.lng])), { padding: [50, 50], maxZoom: 14 }); }
+      try { mapInstanceRef.current.fitBounds(L.latLngBounds(valid.map(v => [v.lat, v.lng])), { padding: [50, 50], maxZoom: 14 }); }
       catch {}
     }
   }, [vehicles, geoNames]);
 
-  // Staggered reverse-geocoding (1.2 s apart — Nominatim limit is 1 req/s)
+  // Staggered reverse-geocoding
   useEffect(() => {
     timerRefs.current.forEach(clearTimeout);
     timerRefs.current = [];
-
     const valid = vehicles.filter(v => v.lat != null && v.lng != null && Math.abs(v.lat) > 0.001);
     let delay = 0;
     for (const v of valid) {
@@ -3373,80 +3488,99 @@ function LiveMapView() {
   const gpsCount     = vehicles.filter(v => v.lat != null && Math.abs(v.lat) > 0.001).length;
 
   return (
-    <div style={{ display: 'flex', gap: 16, height: 'calc(100vh - 180px)', minHeight: 500 }}>
+    <div style={{ display: 'flex', gap: 0, height: 'calc(100vh - 180px)', minHeight: 500, position: 'relative' }}>
       {/* Map */}
-      <div style={{ flex: 1, borderRadius: 16, overflow: 'hidden', border: `1px solid ${t.border}`, boxShadow: '0 2px 12px rgba(0,0,0,0.08)', position: 'relative' }}>
+      <div style={{ flex: 1, borderRadius: rightOpen ? '16px 0 0 16px' : 16, overflow: 'hidden', border: `1px solid ${t.border}`, boxShadow: '0 2px 12px rgba(0,0,0,0.08)', position: 'relative', transition: 'border-radius 0.2s' }}>
         <div ref={mapRef} style={{ width: '100%', height: '100%' }} />
         {loading && (
-          <div style={{ position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)',
-            background: t.panel, border: `1px solid ${t.border}`, borderRadius: 10, padding: '8px 16px',
-            fontSize: 13, color: t.textSoft, zIndex: 1000 }}>
+          <div style={{ position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)', background: t.panel, border: `1px solid ${t.border}`, borderRadius: 10, padding: '8px 16px', fontSize: 13, color: t.textSoft, zIndex: 1000 }}>
             Fetching vehicle positions…
           </div>
         )}
         {error && (
-          <div style={{ position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)',
-            background: t.redSoft, border: `1px solid ${t.red}`, borderRadius: 10, padding: '8px 16px',
-            fontSize: 13, color: t.red, zIndex: 1000 }}>
+          <div style={{ position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)', background: t.redSoft, border: `1px solid ${t.red}`, borderRadius: 10, padding: '8px 16px', fontSize: 13, color: t.red, zIndex: 1000 }}>
             {error}
           </div>
         )}
+        {/* Right sidebar toggle button on map edge */}
+        <button onClick={() => setRightOpen(p => !p)} style={{
+          position: 'absolute', right: 0, top: '50%', transform: 'translateY(-50%)',
+          zIndex: 1000, background: t.accent, border: 'none', borderRadius: '8px 0 0 8px',
+          color: '#fff', cursor: 'pointer', padding: '10px 5px', fontSize: 12, lineHeight: 1,
+          boxShadow: '-2px 0 8px rgba(0,0,0,0.15)',
+        }}>
+          {rightOpen ? '▶' : '◀'}
+        </button>
       </div>
 
-      {/* Sidebar */}
-      <div style={{ width: 300, display: 'flex', flexDirection: 'column', gap: 10 }}>
-        {/* Summary counts */}
-        <div style={{ display: 'flex', gap: 8 }}>
-          {[
-            { label: 'Online',  count: onlineCount,  color: t.green },
-            { label: 'Alarm',   count: alarmCount,   color: t.red   },
-            { label: 'Offline', count: offlineCount, color: t.muted },
-          ].map(({ label, count, color }) => (
-            <div key={label} style={{ flex: 1, background: `${color}18`, border: `1px solid ${color}44`, borderRadius: 12, padding: '10px 8px', textAlign: 'center' }}>
-              <div style={{ fontWeight: 800, fontSize: 20, color }}>{count}</div>
-              <div style={{ fontSize: 11, color: t.muted, fontWeight: 600 }}>{label}</div>
+      {/* Right Sidebar */}
+      {rightOpen && (
+        <div style={{ width: 300, display: 'flex', flexDirection: 'column', gap: 10, marginLeft: 8 }}>
+          <div style={{ display: 'flex', gap: 8 }}>
+            {[
+              { label: 'Online',  count: onlineCount,  color: t.green },
+              { label: 'Alarm',   count: alarmCount,   color: t.red   },
+              { label: 'Offline', count: offlineCount, color: t.muted },
+            ].map(({ label, count, color }) => (
+              <div key={label} style={{ flex: 1, background: `${color}18`, border: `1px solid ${color}44`, borderRadius: 12, padding: '10px 8px', textAlign: 'center' }}>
+                <div style={{ fontWeight: 800, fontSize: 20, color }}>{count}</div>
+                <div style={{ fontSize: 11, color: t.muted, fontWeight: 600 }}>{label}</div>
+              </div>
+            ))}
+          </div>
+          {vehicles.length > 0 && gpsCount < vehicles.length && (
+            <div style={{ fontSize: 11, color: t.muted, textAlign: 'center' }}>{gpsCount}/{vehicles.length} vehicles have GPS</div>
+          )}
+          <Panel title={`FLEET LOCATIONS (${vehicles.length})`} style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+            <div style={{ overflowY: 'auto', flex: 1 }}>
+              {loading && vehicles.length === 0
+                ? <div style={{ padding: 20, color: t.muted, fontSize: 13, textAlign: 'center' }}>Loading…</div>
+                : vehicles.length === 0
+                  ? <Empty icon="🗺️" text="No vehicles found" />
+                  : vehicles.map(v => {
+                      const geo      = geoNames[v.devIdno];
+                      const hasGPS   = v.lat != null && Math.abs(v.lat) > 0.001;
+                      const isOnline = v.online === 1 || v.online === 2;
+                      const statusColor = v.online === 1 ? t.green : v.online === 2 ? t.red : t.muted;
+                      return (
+                        <div key={v.devIdno} style={{ borderBottom: `1px solid ${t.border}` }}>
+                          <div
+                            onClick={() => focusVehicle(v)}
+                            style={{ padding: '10px 16px', cursor: hasGPS ? 'pointer' : 'default', transition: 'background 0.15s' }}
+                            onMouseEnter={e => { if (hasGPS) e.currentTarget.style.background = t.accentSoft; }}
+                            onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                              <div style={{ width: 9, height: 9, borderRadius: '50%', background: statusColor, flexShrink: 0, boxShadow: v.online === 1 ? `0 0 6px ${t.green}` : 'none' }} />
+                              <span style={{ fontWeight: 700, color: t.text, fontSize: 13, flex: 1 }}>{v.plate || v.devIdno}</span>
+                              {v.speed > 0 && <span style={{ color: t.accent, fontSize: 11, fontWeight: 700 }}>{v.speed} km/h</span>}
+                            </div>
+                            <div style={{ fontSize: 11, color: t.muted, marginTop: 3, paddingLeft: 17, lineHeight: 1.4 }}>
+                              {!hasGPS ? '⚠️ No GPS signal' : geo ? `📍 ${geo}` : '📍 Fetching…'}
+                            </div>
+                          </div>
+                          {isOnline && (
+                            <div style={{ padding: '0 16px 10px 16px' }}>
+                              <button
+                                onClick={() => openStreamRef.current?.(v.devIdno)}
+                                style={{ width: '100%', padding: '6px 0', background: '#6366f122', border: '1px solid #6366f155', borderRadius: 8, color: '#818cf8', cursor: 'pointer', fontSize: 12, fontWeight: 700, fontFamily: 'inherit' }}>
+                                📷 Live Cameras
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })
+              }
             </div>
-          ))}
+          </Panel>
         </div>
-        {vehicles.length > 0 && gpsCount < vehicles.length && (
-          <div style={{ fontSize: 11, color: t.muted, textAlign: 'center' }}>
-            {gpsCount}/{vehicles.length} vehicles have GPS signal
-          </div>
-        )}
+      )}
 
-        {/* Vehicle list */}
-        <Panel title={`FLEET LOCATIONS (${vehicles.length})`} style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-          <div style={{ overflowY: 'auto', flex: 1 }}>
-            {loading && vehicles.length === 0
-              ? <div style={{ padding: 20, color: t.muted, fontSize: 13, textAlign: 'center' }}>Loading…</div>
-              : vehicles.length === 0
-                ? <Empty icon="🗺️" text="No vehicles found" />
-                : vehicles.map(v => {
-                    const geo      = geoNames[v.devIdno];
-                    const hasGPS   = v.lat != null && Math.abs(v.lat) > 0.001;
-                    const statusColor = v.online === 1 ? t.green : v.online === 2 ? t.red : t.muted;
-                    return (
-                      <div key={v.devIdno}
-                        onClick={() => focusVehicle(v)}
-                        style={{ padding: '12px 16px', borderBottom: `1px solid ${t.border}`, cursor: hasGPS ? 'pointer' : 'default', transition: 'background 0.15s' }}
-                        onMouseEnter={e => { if (hasGPS) e.currentTarget.style.background = t.accentSoft; }}
-                        onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <div style={{ width: 9, height: 9, borderRadius: '50%', background: statusColor, flexShrink: 0,
-                            boxShadow: v.online === 1 ? `0 0 6px ${t.green}` : 'none' }} />
-                          <span style={{ fontWeight: 700, color: t.text, fontSize: 14, flex: 1 }}>{v.plate || v.devIdno}</span>
-                          {v.speed > 0 && <span style={{ color: t.accent, fontSize: 11, fontWeight: 700 }}>{v.speed} km/h</span>}
-                        </div>
-                        <div style={{ fontSize: 11, color: t.muted, marginTop: 4, paddingLeft: 17, lineHeight: 1.5 }}>
-                          {!hasGPS ? '⚠️ No GPS signal' : geo ? `📍 ${geo}` : '📍 Fetching location…'}
-                        </div>
-                      </div>
-                    );
-                  })
-            }
-          </div>
-        </Panel>
-      </div>
+      {/* Camera overlay (position:fixed so it floats above everything) */}
+      <MapCameraOverlay
+        panels={streamPanels}
+        onClosePanel={(id) => setStreamPanels(prev => prev.filter(p => p.devIdno !== id))}
+      />
     </div>
   );
 }
@@ -4042,7 +4176,8 @@ const NAV = [
 
 function FleetDashboardContent() {
   const { t, theme, toggleTheme } = useTheme();
-  const [view, setView] = useState("dashboard");
+  const [view,        setView]        = useState("dashboard");
+  const [sidebarOpen, setSidebarOpen] = useState(true);
   const [selectedVehicle, setSelectedVehicle] = useState(null);
   const [videoVehicle,    setVideoVehicle]    = useState(null);
   const [sideStreamVehicle, setSideStreamVehicle] = useState(null);
@@ -4189,30 +4324,27 @@ function FleetDashboardContent() {
 
       {/* ── Sidebar ── */}
       <div style={{
-        position: "fixed", left: 0, top: 0, bottom: 0, width: 240,
+        position: "fixed", left: 0, top: 0, bottom: 0, width: sidebarOpen ? 240 : 52,
         background: t.sidebar,
         borderRight: `1px solid ${t.border}`,
         display: "flex", flexDirection: "column", zIndex: 100,
         boxShadow: "4px 0 24px rgba(0,0,0,0.06)",
+        transition: "width 0.2s",
+        overflow: "hidden",
       }}>
         {/* Logo */}
-        <div style={{ padding: "28px 20px 20px" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-            <div style={{
-              background: `linear-gradient(135deg, ${t.accent}, ${t.accentAlt})`,
-              borderRadius: 14, width: 44, height: 44,
-              display: "flex", alignItems: "center", justifyContent: "center",
-              fontSize: 22, boxShadow: `0 6px 20px ${t.accentGlow}`,
-            }}>🚌</div>
-            <div>
+        <div style={{ padding: sidebarOpen ? "28px 20px 20px" : "14px 0", display: "flex", justifyContent: "center" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: sidebarOpen ? 12 : 0 }}>
+            <div style={{ background: `linear-gradient(135deg, ${t.accent}, ${t.accentAlt})`, borderRadius: 14, width: 44, height: 44, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, boxShadow: `0 6px 20px ${t.accentGlow}`, flexShrink: 0 }}>🚌</div>
+            {sidebarOpen && <div>
               <div style={{ fontWeight: 800, fontSize: 16, color: t.text, letterSpacing: -0.3 }}>HELION</div>
               <div style={{ color: t.textSoft, fontSize: 12, fontWeight: 400 }}>Fleet Management</div>
-            </div>
+            </div>}
           </div>
         </div>
 
         {/* ERP Company Switcher */}
-        <div style={{ margin: "0 10px 10px" }}>
+        {sidebarOpen && <div style={{ margin: "0 10px 10px" }}>
           <div style={{ color: t.muted, fontSize: 10, fontWeight: 700, letterSpacing: 1.4, padding: "0 4px 7px", textTransform: "uppercase" }}>HELION</div>
           <div style={{ display: "flex", flexDirection: "column", gap: 3, maxHeight: 180, overflowY: "auto" }}>
             {/* All Companies */}
@@ -4268,34 +4400,35 @@ function FleetDashboardContent() {
               </div>
             ))}
           </div>
-        </div>
+        </div>}
 
         {/* Nav */}
-        <div style={{ paddingLeft: 8, paddingRight: 8, marginBottom: 4 }}>
+        {sidebarOpen && <div style={{ paddingLeft: 8, paddingRight: 8, marginBottom: 4 }}>
           <div style={{ color: t.muted, fontSize: 10, fontWeight: 700, letterSpacing: 1.5, padding: "4px 12px 8px", textTransform: "uppercase" }}>Menu</div>
-        </div>
-        <nav style={{ padding: "0 10px", flex: 1, overflowY: "auto" }}>
+        </div>}
+        <nav style={{ padding: "0 4px", flex: 1, overflowY: "auto" }}>
           {NAV.map(item => {
             const active = view === item.id;
             return (
-              <button key={item.id} onClick={() => setView(item.id)} style={{
-                display: "flex", alignItems: "center", gap: 12, width: "100%",
-                padding: "11px 14px", marginBottom: 2,
-                background: active ? `linear-gradient(90deg, ${t.accentAlt}, ${t.accent})` : "transparent",
-                border: "none",
-                borderRadius: 12, cursor: "pointer", textAlign: "left", transition: "all 0.15s",
-                color: active ? "#fff" : t.textSoft,
-                fontSize: 14, fontWeight: active ? 700 : 500,
-              }}
+              <button key={item.id} onClick={() => setView(item.id)}
+                title={!sidebarOpen ? item.label : undefined}
+                style={{
+                  display: "flex", alignItems: "center", justifyContent: sidebarOpen ? "flex-start" : "center",
+                  gap: sidebarOpen ? 12 : 0, width: "100%",
+                  padding: sidebarOpen ? "11px 10px" : "11px 0", marginBottom: 2,
+                  background: active ? `linear-gradient(90deg, ${t.accentAlt}, ${t.accent})` : "transparent",
+                  border: "none", borderRadius: 12, cursor: "pointer", textAlign: "left", transition: "all 0.15s",
+                  color: active ? "#fff" : t.textSoft, fontSize: 14, fontWeight: active ? 700 : 500,
+                }}
                 onMouseEnter={e => { if (!active) { e.currentTarget.style.background = t.panelBright; e.currentTarget.style.color = t.text; } }}
                 onMouseLeave={e => { if (!active) { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = t.textSoft; } }}
               >
-                <span style={{ fontSize: 18, width: 22, textAlign: "center", opacity: active ? 1 : 0.7 }}>{item.icon}</span>
-                <span style={{ flex: 1 }}>{item.label}</span>
-                {item.id === "alarms" && totals.alarming > 0 && (
+                <span style={{ fontSize: 18, width: 22, textAlign: "center", opacity: active ? 1 : 0.7, flexShrink: 0 }}>{item.icon}</span>
+                {sidebarOpen && <span style={{ flex: 1 }}>{item.label}</span>}
+                {sidebarOpen && item.id === "alarms" && totals.alarming > 0 && (
                   <span style={{ background: t.red, color: "#fff", borderRadius: 20, padding: "1px 8px", fontSize: 10, fontWeight: 800 }}>{totals.alarming}</span>
                 )}
-                {item.id === "notifs" && unreadCount > 0 && (
+                {sidebarOpen && item.id === "notifs" && unreadCount > 0 && (
                   <span style={{ background: t.orange, color: "#fff", borderRadius: 20, padding: "1px 8px", fontSize: 10, fontWeight: 800 }}>{unreadCount > 99 ? "99+" : unreadCount}</span>
                 )}
               </button>
@@ -4312,7 +4445,7 @@ function FleetDashboardContent() {
             fontFamily: "inherit",
           }}>
             <span style={{ fontSize: 16 }}>{theme === "dark" ? "🌙" : "☀️"}</span>
-            <span style={{ flex: 1, textAlign: "left" }}>{theme === "dark" ? "Dark Mode" : "Light Mode"}</span>
+            {sidebarOpen && <span style={{ flex: 1, textAlign: "left" }}>{theme === "dark" ? "Dark Mode" : "Light Mode"}</span>}
             <div style={{
               width: 34, height: 20, borderRadius: 10, flexShrink: 0,
               background: theme === "dark" ? t.accentAlt : t.green,
@@ -4327,23 +4460,29 @@ function FleetDashboardContent() {
           </button>
         </div>
 
-        {/* Live status */}
-        <div style={{ padding: "12px 20px", display: "flex", alignItems: "center", gap: 10, borderTop: `1px solid ${t.border}` }}>
-          <div style={{
-            width: 8, height: 8, borderRadius: "50%",
-            background: snapError ? t.red : t.green,
-            boxShadow: snapError ? "none" : `0 0 8px ${t.green}`,
-            animation: snapError ? "none" : "pulse 2.5s infinite",
-          }} />
-          <div style={{ flex: 1 }}>
-            <div style={{ color: snapError ? t.red : t.green, fontSize: 12, fontWeight: 700 }}>{snapError ? "Connection Error" : "Live Feed Active"}</div>
-            <div style={{ color: t.muted, fontSize: 11, marginTop: 1 }}>Updated {lastUpdated.toLocaleTimeString()}</div>
-          </div>
+        {/* Live status + collapse toggle */}
+        <div style={{ borderTop: `1px solid ${t.border}` }}>
+          {sidebarOpen && (
+            <div style={{ padding: "12px 20px", display: "flex", alignItems: "center", gap: 10 }}>
+              <div style={{ width: 8, height: 8, borderRadius: "50%", background: snapError ? t.red : t.green, boxShadow: snapError ? "none" : `0 0 8px ${t.green}`, animation: snapError ? "none" : "pulse 2.5s infinite" }} />
+              <div style={{ flex: 1 }}>
+                <div style={{ color: snapError ? t.red : t.green, fontSize: 12, fontWeight: 700 }}>{snapError ? "Connection Error" : "Live Feed Active"}</div>
+                <div style={{ color: t.muted, fontSize: 11, marginTop: 1 }}>Updated {lastUpdated.toLocaleTimeString()}</div>
+              </div>
+            </div>
+          )}
+          <button onClick={() => setSidebarOpen(p => !p)} style={{
+            width: "100%", padding: "10px 0", background: "transparent", border: "none",
+            color: t.muted, cursor: "pointer", fontSize: 18, display: "flex", alignItems: "center", justifyContent: "center",
+            borderTop: sidebarOpen ? `1px solid ${t.border}` : "none",
+          }} title={sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}>
+            {sidebarOpen ? "◀" : "▶"}
+          </button>
         </div>
       </div>
 
       {/* ── Main Content ── */}
-      <div style={{ marginLeft: 240, minHeight: "100vh" }}>
+      <div style={{ marginLeft: sidebarOpen ? 240 : 52, minHeight: "100vh", transition: "margin-left 0.2s" }}>
         {/* Top bar */}
         <div style={{
           display: "flex", justifyContent: "space-between", alignItems: "center",
