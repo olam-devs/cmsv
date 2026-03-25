@@ -3232,7 +3232,7 @@ async function reverseGeocode(lat, lng) {
 }
 
 function buildMarkerIcon(v) {
-  const color = v.online === 1 ? '#22c55e' : v.online === 2 ? '#ef4444' : '#94a3b8';
+  const color = !v.online ? '#ef4444' : v.accOn ? '#22c55e' : '#f97316';
   return L.divIcon({
     className: '',
     html: `<div style="width:38px;height:38px;border-radius:50%;background:${color};border:3px solid #fff;
@@ -3244,9 +3244,12 @@ function buildMarkerIcon(v) {
 }
 
 function buildPopupHtml(v, geoName) {
-  const statusText  = v.online === 1 ? 'Online' : v.online === 2 ? 'Alarm' : 'Offline';
-  const statusColor = v.online === 1 ? '#22c55e' : v.online === 2 ? '#ef4444' : '#94a3b8';
-  const streamBtn   = (v.online === 1 || v.online === 2)
+  const statusColor = !v.online ? '#ef4444' : v.accOn ? '#22c55e' : '#f97316';
+  const statusText  = !v.online ? 'Offline' : v.accOn ? 'Online · ACC ON' : 'Online · ACC OFF';
+  const alarmBadge  = v.online === 2
+    ? `<span style="margin-left:6px;background:#ef444422;color:#ef4444;border-radius:6px;padding:2px 8px;font-size:11px;font-weight:700">⚡ Alarm</span>`
+    : '';
+  const streamBtn   = v.online
     ? `<button data-stream-id="${v.devIdno}" style="margin-top:10px;width:100%;padding:8px 0;background:#6366f1;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:13px;font-weight:700;font-family:inherit;display:flex;align-items:center;justify-content:center;gap:6px">📷 Live Cameras</button>`
     : '';
   return `<div style="font-family:'DM Sans',system-ui,sans-serif;min-width:210px;padding:4px 2px">
@@ -3258,8 +3261,9 @@ function buildPopupHtml(v, geoName) {
       <span>🏎️ <b>${v.speed != null ? v.speed + ' km/h' : '—'}</b></span>
       <span>🔑 <b style="color:${v.accOn ? '#22c55e' : '#94a3b8'}">ACC ${v.accOn ? 'ON' : 'OFF'}</b></span>
     </div>
-    <div style="margin-top:8px;display:inline-block;background:${statusColor}22;color:${statusColor};
-      border-radius:6px;padding:2px 8px;font-size:11px;font-weight:700">${statusText}</div>
+    <div style="margin-top:8px;display:flex;align-items:center;flex-wrap:wrap;gap:4px">
+      <span style="background:${statusColor}22;color:${statusColor};border-radius:6px;padding:2px 8px;font-size:11px;font-weight:700">${statusText}</span>${alarmBadge}
+    </div>
     <div style="font-size:10px;color:#9ca3af;margin-top:6px">${v.lat?.toFixed(5)}, ${v.lng?.toFixed(5)}</div>
     ${streamBtn}
   </div>`;
@@ -3606,9 +3610,9 @@ function LiveMapView() {
     markersRef.current[v.devIdno]?.openPopup();
   };
 
-  const onlineCount  = vehicles.filter(v => v.online === 1).length;
-  const alarmCount   = vehicles.filter(v => v.online === 2).length;
-  const offlineCount = vehicles.filter(v => v.online === 0).length;
+  const accOnCount   = vehicles.filter(v => v.online && v.accOn).length;
+  const accOffCount  = vehicles.filter(v => v.online && !v.accOn).length;
+  const offlineCount = vehicles.filter(v => !v.online).length;
   const gpsCount     = vehicles.filter(v => v.lat != null && Math.abs(v.lat) > 0.001).length;
 
   return (
@@ -3654,9 +3658,9 @@ function LiveMapView() {
         <div style={{ width: 300, display: 'flex', flexDirection: 'column', gap: 10, marginLeft: 8 }}>
           <div style={{ display: 'flex', gap: 8 }}>
             {[
-              { label: 'Online',  count: onlineCount,  color: t.green },
-              { label: 'Alarm',   count: alarmCount,   color: t.red   },
-              { label: 'Offline', count: offlineCount, color: t.muted },
+              { label: 'ACC ON',  count: accOnCount,   color: t.green  },
+              { label: 'ACC OFF', count: accOffCount,  color: t.orange },
+              { label: 'Offline', count: offlineCount, color: t.red    },
             ].map(({ label, count, color }) => (
               <div key={label} style={{ flex: 1, background: `${color}18`, border: `1px solid ${color}44`, borderRadius: 12, padding: '10px 8px', textAlign: 'center' }}>
                 <div style={{ fontWeight: 800, fontSize: 20, color }}>{count}</div>
@@ -3677,7 +3681,7 @@ function LiveMapView() {
                       const geo      = geoNames[v.devIdno];
                       const hasGPS   = v.lat != null && Math.abs(v.lat) > 0.001;
                       const isOnline = v.online === 1 || v.online === 2;
-                      const statusColor = v.online === 1 ? t.green : v.online === 2 ? t.red : t.muted;
+                      const statusColor = !v.online ? t.red : v.accOn ? t.green : t.orange;
                       return (
                         <div key={v.devIdno} style={{ borderBottom: `1px solid ${t.border}` }}>
                           <div
@@ -3686,7 +3690,7 @@ function LiveMapView() {
                             onMouseEnter={e => { if (hasGPS) e.currentTarget.style.background = t.accentSoft; }}
                             onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                              <div style={{ width: 9, height: 9, borderRadius: '50%', background: statusColor, flexShrink: 0, boxShadow: v.online === 1 ? `0 0 6px ${t.green}` : 'none' }} />
+                              <div style={{ width: 9, height: 9, borderRadius: '50%', background: statusColor, flexShrink: 0, boxShadow: isOnline ? `0 0 6px ${statusColor}` : 'none' }} />
                               <span style={{ fontWeight: 700, color: t.text, fontSize: 13, flex: 1 }}>{v.plate || v.devIdno}</span>
                               {v.speed > 0 && <span style={{ color: t.accent, fontSize: 11, fontWeight: 700 }}>{v.speed} km/h</span>}
                             </div>
