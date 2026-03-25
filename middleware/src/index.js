@@ -46,6 +46,45 @@ app.use(morgan('combined', { stream: { write: (msg) => logger.info(msg.trim()) }
 const distPath = path.join(__dirname, '../../frontend/dist');
 app.use(express.static(distPath));
 
+// ── HLS video stream proxy (before auth/rate-limiter — jsession in query param) ──
+// Proxies CMSV6 HTTP video streams so they work on the HTTPS production site.
+app.get('/api/video/hls', async (req, res) => {
+  try {
+    const { devIdno, channel, stream, jsession } = req.query;
+    const host = (process.env.CMSV6_BASE_URL || 'http://13.53.215.88').replace(/^https?:\/\//, '');
+    const port = process.env.CMSV6_VIDEO_PORT || 6604;
+    const m3u8Url = `http://${host}:${port}/hls/1_${devIdno}_${channel}_${stream}.m3u8?jsession=${jsession}`;
+    const r = await fetch(m3u8Url);
+    if (!r.ok) return res.status(r.status).end();
+    const text = await r.text();
+    const baseUrl = `http://${host}:${port}/hls/`;
+    // Rewrite segment paths to go through our segment proxy
+    const rewritten = text.split('\n').map(line => {
+      const t = line.trim();
+      if (!t || t.startsWith('#')) return line;
+      const segUrl = t.startsWith('http') ? t : baseUrl + t;
+      return `/api/video/segment?url=${encodeURIComponent(segUrl)}`;
+    }).join('\n');
+    res.set('Content-Type', 'application/vnd.apple.mpegurl');
+    res.set('Cache-Control', 'no-cache');
+    res.send(rewritten);
+  } catch (e) { res.status(502).end(); }
+});
+
+app.get('/api/video/segment', async (req, res) => {
+  try {
+    const url = decodeURIComponent(req.query.url || '');
+    const host = (process.env.CMSV6_BASE_URL || 'http://13.53.215.88').replace(/^https?:\/\//, '');
+    if (!url.includes(host)) return res.status(403).end();
+    const r = await fetch(url);
+    if (!r.ok) return res.status(r.status).end();
+    res.set('Content-Type', 'video/mp2t');
+    res.set('Cache-Control', 'no-cache');
+    const buf = await r.arrayBuffer();
+    res.send(Buffer.from(buf));
+  } catch (e) { res.status(502).end(); }
+});
+
 // ── Map tile proxy (before rate limiter — tiles are high-volume image requests) ──
 app.get('/api/tiles/:z/:x/:y', async (req, res) => {
   try {

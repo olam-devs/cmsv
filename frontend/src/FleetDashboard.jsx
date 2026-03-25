@@ -3270,35 +3270,28 @@ function buildPopupHtml(v, geoName) {
 // Individual channel buttons (1–5) switch to that single-camera view.
 
 function MapCameraOverlay({ panels, onClosePanel }) {
-  const [selCh,     setSelCh]     = useState({});   // devIdno → active channel (default 6)
-  const [positions, setPositions] = useState({});   // devIdno → { x, y }
-  const dragRef = useRef(null); // { devIdno, startX, startY, origX, origY }
+  const [selCh,        setSelCh]        = useState({});  // devIdno → channel (1-6)
+  const [positions,    setPositions]    = useState({});  // devIdno → { x, y }
+  const [repositioning, setRepositioning] = useState(null); // devIdno awaiting tap-to-place
+  const dragRef = useRef(null);
+  const Hls = useHlsJs();
 
-  // Global mouse move / up handlers for drag
+  // Global mouse move / up for drag
   useEffect(() => {
     const onMove = (e) => {
       if (!dragRef.current) return;
       const { devIdno, startX, startY, origX, origY } = dragRef.current;
-      setPositions(prev => ({
-        ...prev,
-        [devIdno]: { x: origX + e.clientX - startX, y: origY + e.clientY - startY },
-      }));
+      setPositions(prev => ({ ...prev, [devIdno]: { x: origX + e.clientX - startX, y: origY + e.clientY - startY } }));
     };
     const onUp = () => { dragRef.current = null; };
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup',   onUp);
-    return () => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup',   onUp);
-    };
+    return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
   }, []);
 
   const startDrag = (e, devIdno, index) => {
-    if (e.target.tagName === 'BUTTON') return; // don't drag on button clicks
-    const pos = positions[devIdno] ?? {
-      x: window.innerWidth  - 720 - 20,
-      y: window.innerHeight - 450 - 20 - index * 30,
-    };
+    if (e.target.tagName === 'BUTTON') return;
+    const pos = positions[devIdno] ?? { x: window.innerWidth - 720 - 20, y: window.innerHeight - 480 - 20 - index * 30 };
     dragRef.current = { devIdno, startX: e.clientX, startY: e.clientY, origX: pos.x, origY: pos.y };
     e.preventDefault();
   };
@@ -3307,61 +3300,135 @@ function MapCameraOverlay({ panels, onClosePanel }) {
 
   return (
     <>
+      {/* Tap-to-place overlay — shown after double-tap on title bar */}
+      {repositioning && (
+        <div
+          style={{ position: 'fixed', inset: 0, zIndex: 9998, cursor: 'crosshair', background: 'rgba(99,102,241,0.12)' }}
+          onClick={e => {
+            setPositions(prev => ({ ...prev, [repositioning]: { x: e.clientX - 350, y: e.clientY - 22 } }));
+            setRepositioning(null);
+          }}
+        >
+          <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', background: 'rgba(99,102,241,0.85)', color: '#fff', borderRadius: 12, padding: '12px 28px', fontSize: 14, fontWeight: 700, pointerEvents: 'none' }}>
+            Tap where to place the panel
+          </div>
+        </div>
+      )}
+
       {panels.map((panel, index) => {
-        const ch  = selCh[panel.devIdno] ?? 6;
-        const url = panel.channelUrls[ch - 1];
-        const pos = positions[panel.devIdno] ?? {
-          x: window.innerWidth  - 720 - 20,
-          y: window.innerHeight - 450 - 20 - index * 30,
-        };
+        const ch  = selCh[panel.devIdno] ?? 1;
+        // HLS URL computed on-the-fly — channel is 0-based for the CMSV6 stream path
+        const hlsUrl = `/api/video/hls?devIdno=${panel.devIdno}&channel=${ch - 1}&stream=1&jsession=${panel.jsession}`;
+        const pos = positions[panel.devIdno] ?? { x: window.innerWidth - 720 - 20, y: window.innerHeight - 480 - 20 - index * 30 };
+        const isRepos = repositioning === panel.devIdno;
+
         return (
           <div key={panel.devIdno} style={{
-            position: 'fixed', left: pos.x, top: pos.y, zIndex: 9999 + index,
-            width: 700, background: '#111827', border: '1px solid #374151',
-            borderRadius: 14, overflow: 'hidden',
-            boxShadow: '0 8px 32px rgba(0,0,0,0.6)',
-            userSelect: 'none',
+            position: 'fixed', left: pos.x, top: pos.y, zIndex: (repositioning ? 9997 : 9999) + index,
+            width: 700, background: '#111827',
+            border: `1px solid ${isRepos ? '#6366f1' : '#374151'}`,
+            boxShadow: isRepos ? '0 0 0 3px #6366f1, 0 8px 32px rgba(0,0,0,0.6)' : '0 8px 32px rgba(0,0,0,0.6)',
+            borderRadius: 14, overflow: 'hidden', userSelect: 'none',
           }}>
-            {/* Drag handle / title bar */}
+            {/* Title bar — drag with mouse, double-tap to reposition */}
             <div
               onMouseDown={e => startDrag(e, panel.devIdno, index)}
-              style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 12px', background: '#1f2937', borderBottom: '1px solid #374151', cursor: 'grab' }}>
-              <span style={{ color: '#6b7280', fontSize: 13, marginRight: 2, pointerEvents: 'none' }}>⠿</span>
+              onDoubleClick={() => setRepositioning(panel.devIdno)}
+              title="Drag to move · Double-tap to reposition by tap"
+              style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 12px', background: '#1f2937', borderBottom: '1px solid #374151', cursor: isRepos ? 'crosshair' : 'grab' }}>
+              <span style={{ color: '#6b7280', fontSize: 13, pointerEvents: 'none' }}>⠿</span>
               <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#22c55e', boxShadow: '0 0 6px #22c55e', flexShrink: 0 }} />
               <span style={{ color: '#fff', fontWeight: 800, fontSize: 14, flex: 1, pointerEvents: 'none' }}>{panel.plate}</span>
-              {[6, 1, 2, 3, 4, 5].map(n => (
+              {/* Channel selector */}
+              {[1,2,3,4,5,6].map(n => (
                 <button key={n} onClick={() => setSelCh(prev => ({ ...prev, [panel.devIdno]: n }))}
                   style={{ background: ch === n ? '#6366f1' : '#374151', border: 'none', borderRadius: 6, color: '#fff', cursor: 'pointer', fontSize: 11, fontWeight: 700, padding: '4px 8px', fontFamily: 'inherit' }}>
-                  {n === 6 ? 'All' : `CH${n}`}
+                  CH{n}
                 </button>
               ))}
+              {/* Optional: open in new window */}
+              <button onClick={() => window.open(panel.playerUrl, '_blank', 'width=1000,height=650,menubar=no,toolbar=no,location=no')}
+                title="Open in new window"
+                style={{ background: 'transparent', border: '1px solid #374151', borderRadius: 6, color: '#9ca3af', cursor: 'pointer', fontSize: 12, padding: '3px 8px', fontFamily: 'inherit' }}>
+                ↗
+              </button>
               <button onClick={() => onClosePanel(panel.devIdno)}
-                style={{ background: '#ef444422', border: '1px solid #ef444455', borderRadius: 6, color: '#ef4444', cursor: 'pointer', fontSize: 13, padding: '3px 8px', lineHeight: 1, marginLeft: 4 }}>
+                style={{ background: '#ef444422', border: '1px solid #ef444455', borderRadius: 6, color: '#ef4444', cursor: 'pointer', fontSize: 13, padding: '3px 8px', lineHeight: 1 }}>
                 ✕
               </button>
             </div>
-            {/* Video — on HTTPS the CMSV6 HTTP iframe is mixed-content-blocked; open externally */}
-            <div style={{ background: '#000' }}>
-              {window.location.protocol === 'https:' ? (
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: 394, gap: 14 }}>
-                  <div style={{ fontSize: 36 }}>📷</div>
-                  <div style={{ fontSize: 13, color: '#9ca3af', textAlign: 'center', lineHeight: 1.6 }}>
-                    Video player requires a direct connection<br />to the camera server (HTTP).
-                  </div>
-                  <button
-                    onClick={() => window.open(url, '_blank', 'width=1000,height=650,menubar=no,toolbar=no,location=no')}
-                    style={{ background: '#6366f1', border: 'none', borderRadius: 10, color: '#fff', cursor: 'pointer', padding: '11px 28px', fontSize: 14, fontWeight: 700, fontFamily: 'inherit' }}>
-                    Open Live View ↗
-                  </button>
-                </div>
-              ) : (
-                <iframe key={url} src={url} style={{ width: '100%', height: 394, border: 'none', display: 'block' }} allowFullScreen title={`${panel.plate} CH${ch}`} />
-              )}
-            </div>
+            {/* HLS video — works on both HTTP and HTTPS */}
+            <MapHlsPlayer key={hlsUrl} hlsUrl={hlsUrl} playerUrl={panel.playerUrl} Hls={Hls} />
           </div>
         );
       })}
     </>
+  );
+}
+
+// ── HLS video player for the map overlay panels ────────────────────────────
+function MapHlsPlayer({ hlsUrl, playerUrl, Hls }) {
+  const videoRef  = useRef(null);
+  const hlsRef    = useRef(null);
+  const [clock,      setClock]      = useState(() => new Date());
+  const [lastUpdate, setLastUpdate] = useState(null);
+  const [vidError,   setVidError]   = useState(null);
+
+  // Tick every second for the live clock
+  useEffect(() => {
+    const iv = setInterval(() => setClock(new Date()), 1000);
+    return () => clearInterval(iv);
+  }, []);
+
+  // Attach HLS.js
+  useEffect(() => {
+    if (!videoRef.current || !Hls) return;
+    setVidError(null);
+    if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
+    if (Hls.isSupported()) {
+      const hls = new Hls({ lowLatencyMode: true, enableWorker: true, maxBufferLength: 10 });
+      hls.on(Hls.Events.FRAG_LOADED, () => setLastUpdate(new Date()));
+      hls.on(Hls.Events.ERROR, (_, d) => { if (d.fatal) setVidError(d.details || 'stream error'); });
+      hls.loadSource(hlsUrl);
+      hls.attachMedia(videoRef.current);
+      hlsRef.current = hls;
+    } else if (videoRef.current.canPlayType('application/vnd.apple.mpegurl')) {
+      videoRef.current.src = hlsUrl;
+      videoRef.current.addEventListener('timeupdate', () => setLastUpdate(new Date()));
+    } else {
+      setVidError('hls_not_supported');
+    }
+    return () => { if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; } };
+  }, [hlsUrl, Hls]);
+
+  const secAgo = lastUpdate ? Math.floor((clock - lastUpdate) / 1000) : null;
+
+  return (
+    <div style={{ position: 'relative', background: '#000', height: 394 }}>
+      {vidError ? (
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 12 }}>
+          <div style={{ fontSize: 32 }}>📡</div>
+          <div style={{ color: '#9ca3af', fontSize: 12, textAlign: 'center' }}>
+            Stream unavailable<br /><span style={{ fontSize: 10, color: '#6b7280' }}>{vidError}</span>
+          </div>
+          <button onClick={() => window.open(playerUrl, '_blank', 'width=1000,height=650,menubar=no,toolbar=no,location=no')}
+            style={{ background: '#6366f1', border: 'none', borderRadius: 8, color: '#fff', cursor: 'pointer', padding: '8px 20px', fontSize: 12, fontWeight: 700, fontFamily: 'inherit' }}>
+            Open in new window ↗
+          </button>
+        </div>
+      ) : (
+        <video ref={videoRef} autoPlay muted playsInline style={{ width: '100%', height: '100%', display: 'block' }} />
+      )}
+      {/* Bottom-left: live clock + feed freshness */}
+      <div style={{ position: 'absolute', bottom: 8, left: 8, background: 'rgba(0,0,0,0.65)', borderRadius: 6, padding: '4px 10px', pointerEvents: 'none' }}>
+        <div style={{ color: '#fff', fontSize: 13, fontWeight: 700, fontFamily: 'monospace', letterSpacing: 0.5 }}>
+          {clock.toLocaleTimeString()}
+        </div>
+        <div style={{ fontSize: 10, marginTop: 1, color: secAgo === null ? '#6b7280' : secAgo < 10 ? '#22c55e' : secAgo < 30 ? '#f59e0b' : '#ef4444' }}>
+          {secAgo === null ? 'connecting…' : secAgo === 0 ? '● live' : `↻ updated ${secAgo}s ago`}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -3416,14 +3483,14 @@ function LiveMapView() {
       const v = vehiclesRef.current.find(v => v.devIdno === devIdno);
       if (!v) return;
       try {
-        // Fetch each channel's URL individually — CMSV6 channel=N means "show N channels"
-        // so we must not reuse the same URL with a replaced channel number
-        const channelUrls = await Promise.all(
-          [1, 2, 3, 4, 5, 6].map(ch =>
-            apiFetch(`/cameras/${devIdno}/stream?channel=${ch}`).then(d => d.playerUrl)
-          )
-        );
-        setStreamPanels(prev => [...prev, { devIdno, plate: v.plate || devIdno, channelUrls }]);
+        // Single fetch — we only need jsession + playerUrl; HLS URLs are computed on-the-fly
+        const data = await apiFetch(`/cameras/${devIdno}/stream?channel=1`);
+        setStreamPanels(prev => [...prev, {
+          devIdno,
+          plate: v.plate || devIdno,
+          jsession: data.jsession,
+          playerUrl: data.playerUrl,  // kept for "Open in new window" fallback
+        }]);
       } catch {}
     };
   }, [streamPanels]);
