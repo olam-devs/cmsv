@@ -4493,14 +4493,30 @@ function FleetDashboardContent() {
         overflow: "hidden",
       }}>
         {/* Logo */}
-        <div style={{ padding: sidebarOpen ? "28px 20px 20px" : "14px 0", display: "flex", justifyContent: "center" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: sidebarOpen ? 12 : 0 }}>
-            <div style={{ background: `linear-gradient(135deg, ${t.accent}, ${t.accentAlt})`, borderRadius: 14, width: 44, height: 44, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, boxShadow: `0 6px 20px ${t.accentGlow}`, flexShrink: 0 }}>🚌</div>
-            {sidebarOpen && <div>
-              <div style={{ fontWeight: 800, fontSize: 16, color: t.text, letterSpacing: -0.3 }}>HELION</div>
-              <div style={{ color: t.textSoft, fontSize: 12, fontWeight: 400 }}>Fleet Management</div>
-            </div>}
-          </div>
+        <div style={{ padding: sidebarOpen ? "20px 16px 16px" : "12px 0", display: "flex", justifyContent: "center" }}>
+          {sidebarOpen ? (
+            /* Full logo — mix-blend-mode:multiply makes white transparent on dark sidebar */
+            <img
+              src="/logo.png"
+              alt="Helion Fleet"
+              style={{
+                width: 150, height: "auto",
+                mixBlendMode: theme === "dark" ? "screen" : "normal",
+                filter: theme === "dark" ? "brightness(1.1)" : "none",
+                borderRadius: 8,
+                display: "block",
+              }}
+            />
+          ) : (
+            /* Collapsed: small icon crop of logo */
+            <div style={{ width: 38, height: 38, borderRadius: 10, overflow: "hidden", background: theme === "dark" ? "#fff1" : "#f1f5f9", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <img
+                src="/logo.png"
+                alt="Helion"
+                style={{ width: 64, height: 64, objectFit: "cover", objectPosition: "50% 30%", mixBlendMode: theme === "dark" ? "screen" : "normal" }}
+              />
+            </div>
+          )}
         </div>
 
         {/* ERP Company Switcher */}
