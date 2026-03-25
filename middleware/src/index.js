@@ -80,6 +80,24 @@ app.get('/health', (req, res) => {
   });
 });
 
+// ── Map tile proxy (no auth — Leaflet fetches images without headers) ────────
+app.get('/api/tiles/:z/:x/:y', async (req, res) => {
+  try {
+    const { z, x, y } = req.params;
+    const url = `https://tile.openstreetmap.org/${z}/${x}/${y}.png`;
+    const response = await fetch(url, {
+      headers: { 'User-Agent': 'StarLink-Fleet/1.0 (fleet.olamtec.co.tz)' },
+    });
+    if (!response.ok) return res.status(response.status).end();
+    res.set('Content-Type', 'image/png');
+    res.set('Cache-Control', 'public, max-age=86400');
+    const buf = await response.arrayBuffer();
+    res.send(Buffer.from(buf));
+  } catch (e) {
+    res.status(502).end();
+  }
+});
+
 // ── Events SSE (auth via ?api_key= query param — EventSource can't set headers) ──
 app.use('/api/events', auth, eventsRoute);
 
