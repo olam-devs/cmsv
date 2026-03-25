@@ -14,6 +14,7 @@ const eventsRoute    = require('./routes/events');
 const monitor        = require('./services/monitor.service');
 const hourlyReport   = require('./services/hourly-report.service');
 const path           = require('path');
+const http           = require('http');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -45,6 +46,91 @@ app.use(morgan('combined', { stream: { write: (msg) => logger.info(msg.trim()) }
 // ── Serve Frontend ────────────────────────────────────────────────────────
 const distPath = path.join(__dirname, '../../frontend/dist');
 app.use(express.static(distPath));
+
+// ── CMSV6 player proxy — serves the HTTP player page from our HTTPS origin ───
+// Rewrites all http://cmsHost URLs inside HTML/JS responses to go through
+// /api/video/static (port 80) and /api/video/stream (port 6604) proxies,
+// so the browser never makes direct HTTP requests from an HTTPS page.
+
+function getCmsHost() {
+  return (process.env.CMSV6_BASE_URL || 'http://13.53.215.88').replace(/^https?:\/\//, '');
+}
+
+function rewriteCmsUrls(body, cmsHost) {
+  const escaped = cmsHost.replace(/\./g, '\\.');
+  return body
+    .replace(new RegExp(`(https?|wss?|ws)://${escaped}:6604`, 'gi'), '/api/video/stream')
+    .replace(new RegExp(`https?://${escaped}(?=[/:])`, 'gi'), '/api/video/static');
+}
+
+function cmsHttpProxy(port, pathPrefix) {
+  return (req, res) => {
+    const cmsHost = getCmsHost();
+    const urlPath = req.url.replace(pathPrefix, '') || '/';
+    const opts = {
+      hostname: cmsHost, port,
+      path: urlPath, method: 'GET',
+      headers: { 'User-Agent': 'StarLink-Fleet/1.0', host: cmsHost },
+      timeout: 15000,
+    };
+    const pr = http.request(opts, proxyRes => {
+      const ct = proxyRes.headers['content-type'] || '';
+      const isText = /text|javascript|json/.test(ct);
+      const h = { ...proxyRes.headers };
+      // Strip headers that block iframe embedding
+      delete h['x-frame-options']; delete h['content-security-policy'];
+      delete h['x-xss-protection']; delete h['strict-transport-security'];
+      if (isText) {
+        const chunks = [];
+        proxyRes.on('data', c => chunks.push(c));
+        proxyRes.on('end', () => {
+          const body = rewriteCmsUrls(Buffer.concat(chunks).toString('utf8'), cmsHost);
+          delete h['content-length'];
+          res.writeHead(proxyRes.statusCode || 200, h);
+          res.end(body);
+        });
+      } else {
+        res.writeHead(proxyRes.statusCode || 200, h);
+        proxyRes.pipe(res);
+      }
+    });
+    pr.on('error', () => { if (!res.headersSent) res.status(502).end(); });
+    pr.end();
+  };
+}
+
+/** GET /api/video/player — Proxy CMSV6 channel=6 player page at same origin */
+app.get('/api/video/player', (req, res) => {
+  const { devIdno, channel = 6, stream = 1, jsession } = req.query;
+  const cmsHost = getCmsHost();
+  const playerPath = `/808gps/open/player/video.html?lang=en&devIdno=${devIdno}&channel=${channel}&stream=${stream}&jsession=${jsession}`;
+  const opts = {
+    hostname: cmsHost, port: 80,
+    path: playerPath, method: 'GET',
+    headers: { 'User-Agent': 'StarLink-Fleet/1.0', host: cmsHost },
+    timeout: 10000,
+  };
+  const pr = http.request(opts, proxyRes => {
+    const chunks = [];
+    proxyRes.on('data', c => chunks.push(c));
+    proxyRes.on('end', () => {
+      let body = Buffer.concat(chunks).toString('utf8');
+      body = rewriteCmsUrls(body, cmsHost);
+      // Inject base for relative URLs so player assets resolve through our proxy
+      body = body.replace(/<head>/i, `<head><base href="/api/video/static/808gps/open/player/">`);
+      res.set('Content-Type', 'text/html');
+      res.send(body);
+    });
+  });
+  pr.on('error', e => res.status(502).send(`<!-- proxy error: ${e.message} -->`));
+  pr.end();
+});
+
+/** /api/video/static/* — Proxy port-80 resources (JS, CSS, images) */
+app.use('/api/video/static', cmsHttpProxy(80, '/api/video/static'));
+
+/** /api/video/stream/* — Proxy port-6604 video streams (FLV/HLS) */
+app.use('/api/video/stream', cmsHttpProxy(6604, '/api/video/stream'));
 
 // ── HLS video stream proxy (before auth/rate-limiter — jsession in query param) ──
 // Proxies CMSV6 HTTP video streams so they work on the HTTPS production site.

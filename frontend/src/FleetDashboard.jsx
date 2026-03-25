@@ -3273,12 +3273,30 @@ function buildPopupHtml(v, geoName) {
 // channel=6 on CMSV6's player shows all 6 cameras in its own native grid.
 // Individual channel buttons (1–5) switch to that single-camera view.
 
+// Panel dimensions — sized so 4 panels fit on a large monitor in a 2×2 grid
+const PANEL_W = 450;
+const PANEL_VIDEO_H = 300;
+
+function defaultPanelPos(index) {
+  // 2×2 grid anchored to bottom-left of viewport (clear of the right sidebar)
+  const col = index % 2;
+  const row = Math.floor(index / 2);
+  return {
+    x: 20 + col * (PANEL_W + 10),
+    y: window.innerHeight - (PANEL_VIDEO_H + 44) - 10 - row * (PANEL_VIDEO_H + 44 + 10),
+  };
+}
+
 function MapCameraOverlay({ panels, onClosePanel }) {
-  const [selCh,        setSelCh]        = useState({});  // devIdno → channel (1-6)
-  const [positions,    setPositions]    = useState({});  // devIdno → { x, y }
-  const [repositioning, setRepositioning] = useState(null); // devIdno awaiting tap-to-place
+  const [positions,     setPositions]     = useState({});
+  const [repositioning, setRepositioning] = useState(null);
+  const [clock,         setClock]         = useState(() => new Date());
   const dragRef = useRef(null);
-  const Hls = useHlsJs();
+
+  useEffect(() => {
+    const iv = setInterval(() => setClock(new Date()), 1000);
+    return () => clearInterval(iv);
+  }, []);
 
   // Global mouse move / up for drag
   useEffect(() => {
@@ -3295,7 +3313,7 @@ function MapCameraOverlay({ panels, onClosePanel }) {
 
   const startDrag = (e, devIdno, index) => {
     if (e.target.tagName === 'BUTTON') return;
-    const pos = positions[devIdno] ?? { x: window.innerWidth - 720 - 20, y: window.innerHeight - 480 - 20 - index * 30 };
+    const pos = positions[devIdno] ?? defaultPanelPos(index);
     dragRef.current = { devIdno, startX: e.clientX, startY: e.clientY, origX: pos.x, origY: pos.y };
     e.preventDefault();
   };
@@ -3309,7 +3327,7 @@ function MapCameraOverlay({ panels, onClosePanel }) {
         <div
           style={{ position: 'fixed', inset: 0, zIndex: 9998, cursor: 'crosshair', background: 'rgba(99,102,241,0.12)' }}
           onClick={e => {
-            setPositions(prev => ({ ...prev, [repositioning]: { x: e.clientX - 350, y: e.clientY - 22 } }));
+            setPositions(prev => ({ ...prev, [repositioning]: { x: e.clientX - PANEL_W / 2, y: e.clientY - 22 } }));
             setRepositioning(null);
           }}
         >
@@ -3320,49 +3338,51 @@ function MapCameraOverlay({ panels, onClosePanel }) {
       )}
 
       {panels.map((panel, index) => {
-        const ch  = selCh[panel.devIdno] ?? 1;
-        // HLS URL computed on-the-fly — channel is 0-based for the CMSV6 stream path
-        const hlsUrl = `/api/video/hls?devIdno=${panel.devIdno}&channel=${ch - 1}&stream=1&jsession=${panel.jsession}`;
-        const pos = positions[panel.devIdno] ?? { x: window.innerWidth - 720 - 20, y: window.innerHeight - 480 - 20 - index * 30 };
-        const isRepos = repositioning === panel.devIdno;
+        // Proxy URL — channel=6 shows CMSV6 native all-camera grid
+        const proxyUrl = `/api/video/player?devIdno=${panel.devIdno}&channel=6&stream=1&jsession=${panel.jsession}`;
+        const pos      = positions[panel.devIdno] ?? defaultPanelPos(index);
+        const isRepos  = repositioning === panel.devIdno;
 
         return (
           <div key={panel.devIdno} style={{
             position: 'fixed', left: pos.x, top: pos.y, zIndex: (repositioning ? 9997 : 9999) + index,
-            width: 700, background: '#111827',
+            width: PANEL_W, background: '#111827',
             border: `1px solid ${isRepos ? '#6366f1' : '#374151'}`,
             boxShadow: isRepos ? '0 0 0 3px #6366f1, 0 8px 32px rgba(0,0,0,0.6)' : '0 8px 32px rgba(0,0,0,0.6)',
-            borderRadius: 14, overflow: 'hidden', userSelect: 'none',
+            borderRadius: 12, overflow: 'hidden', userSelect: 'none',
           }}>
-            {/* Title bar — drag with mouse, double-tap to reposition */}
+            {/* Title bar — drag with mouse, double-tap/click to reposition */}
             <div
               onMouseDown={e => startDrag(e, panel.devIdno, index)}
               onDoubleClick={() => setRepositioning(panel.devIdno)}
-              title="Drag to move · Double-tap to reposition by tap"
-              style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 12px', background: '#1f2937', borderBottom: '1px solid #374151', cursor: isRepos ? 'crosshair' : 'grab' }}>
-              <span style={{ color: '#6b7280', fontSize: 13, pointerEvents: 'none' }}>⠿</span>
-              <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#22c55e', boxShadow: '0 0 6px #22c55e', flexShrink: 0 }} />
-              <span style={{ color: '#fff', fontWeight: 800, fontSize: 14, flex: 1, pointerEvents: 'none' }}>{panel.plate}</span>
-              {/* Channel selector */}
-              {[1,2,3,4,5,6].map(n => (
-                <button key={n} onClick={() => setSelCh(prev => ({ ...prev, [panel.devIdno]: n }))}
-                  style={{ background: ch === n ? '#6366f1' : '#374151', border: 'none', borderRadius: 6, color: '#fff', cursor: 'pointer', fontSize: 11, fontWeight: 700, padding: '4px 8px', fontFamily: 'inherit' }}>
-                  CH{n}
-                </button>
-              ))}
-              {/* Optional: open in new window */}
+              title="Drag · Double-tap to tap-reposition"
+              style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px', background: '#1f2937', borderBottom: '1px solid #374151', cursor: isRepos ? 'crosshair' : 'grab' }}>
+              <span style={{ color: '#6b7280', fontSize: 12, pointerEvents: 'none' }}>⠿</span>
+              <div style={{ width: 7, height: 7, borderRadius: '50%', background: '#22c55e', boxShadow: '0 0 5px #22c55e', flexShrink: 0 }} />
+              <span style={{ color: '#fff', fontWeight: 800, fontSize: 13, flex: 1, pointerEvents: 'none' }}>{panel.plate}</span>
+              {/* Live clock */}
+              <span style={{ color: '#6b7280', fontSize: 11, fontFamily: 'monospace', pointerEvents: 'none' }}>
+                {clock.toLocaleTimeString()}
+              </span>
+              {/* Open in new window (optional) */}
               <button onClick={() => window.open(panel.playerUrl, '_blank', 'width=1000,height=650,menubar=no,toolbar=no,location=no')}
                 title="Open in new window"
-                style={{ background: 'transparent', border: '1px solid #374151', borderRadius: 6, color: '#9ca3af', cursor: 'pointer', fontSize: 12, padding: '3px 8px', fontFamily: 'inherit' }}>
+                style={{ background: 'transparent', border: '1px solid #374151', borderRadius: 5, color: '#9ca3af', cursor: 'pointer', fontSize: 11, padding: '2px 7px', fontFamily: 'inherit' }}>
                 ↗
               </button>
               <button onClick={() => onClosePanel(panel.devIdno)}
-                style={{ background: '#ef444422', border: '1px solid #ef444455', borderRadius: 6, color: '#ef4444', cursor: 'pointer', fontSize: 13, padding: '3px 8px', lineHeight: 1 }}>
+                style={{ background: '#ef444422', border: '1px solid #ef444455', borderRadius: 5, color: '#ef4444', cursor: 'pointer', fontSize: 12, padding: '2px 7px', lineHeight: 1 }}>
                 ✕
               </button>
             </div>
-            {/* HLS video — works on both HTTP and HTTPS */}
-            <MapHlsPlayer key={hlsUrl} hlsUrl={hlsUrl} playerUrl={panel.playerUrl} Hls={Hls} />
+            {/* CMSV6 channel=6 player via same-origin proxy — no mixed-content block */}
+            <iframe
+              key={proxyUrl}
+              src={proxyUrl}
+              style={{ width: '100%', height: PANEL_VIDEO_H, border: 'none', display: 'block' }}
+              allowFullScreen
+              title={panel.plate}
+            />
           </div>
         );
       })}
