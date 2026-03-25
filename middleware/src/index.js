@@ -28,10 +28,28 @@ app.use(morgan('combined', { stream: { write: (msg) => logger.info(msg.trim()) }
 const distPath = path.join(__dirname, '../../frontend/dist');
 app.use(express.static(distPath));
 
-// Rate limiter
+// ── Map tile proxy (before rate limiter — tiles are high-volume image requests) ──
+app.get('/api/tiles/:z/:x/:y', async (req, res) => {
+  try {
+    const { z, x, y } = req.params;
+    const url = `https://tile.openstreetmap.org/${z}/${x}/${y}.png`;
+    const response = await fetch(url, {
+      headers: { 'User-Agent': 'StarLink-Fleet/1.0 (fleet.olamtec.co.tz)' },
+    });
+    if (!response.ok) return res.status(response.status).end();
+    res.set('Content-Type', 'image/png');
+    res.set('Cache-Control', 'public, max-age=86400');
+    const buf = await response.arrayBuffer();
+    res.send(Buffer.from(buf));
+  } catch (e) {
+    res.status(502).end();
+  }
+});
+
+// Rate limiter (API routes only — tiles are excluded above)
 app.use(rateLimit({
   windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 900000,
-  max: parseInt(process.env.RATE_LIMIT_MAX) || 500,
+  max: parseInt(process.env.RATE_LIMIT_MAX) || 2000,
   message: { success: false, message: 'Too many requests' },
 }));
 
@@ -78,24 +96,6 @@ app.get('/health', (req, res) => {
     cmsv6: process.env.CMSV6_BASE_URL,
     chatbot: !!process.env.ANTHROPIC_API_KEY,
   });
-});
-
-// ── Map tile proxy (no auth — Leaflet fetches images without headers) ────────
-app.get('/api/tiles/:z/:x/:y', async (req, res) => {
-  try {
-    const { z, x, y } = req.params;
-    const url = `https://tile.openstreetmap.org/${z}/${x}/${y}.png`;
-    const response = await fetch(url, {
-      headers: { 'User-Agent': 'StarLink-Fleet/1.0 (fleet.olamtec.co.tz)' },
-    });
-    if (!response.ok) return res.status(response.status).end();
-    res.set('Content-Type', 'image/png');
-    res.set('Cache-Control', 'public, max-age=86400');
-    const buf = await response.arrayBuffer();
-    res.send(Buffer.from(buf));
-  } catch (e) {
-    res.status(502).end();
-  }
 });
 
 // ── Events SSE (auth via ?api_key= query param — EventSource can't set headers) ──
