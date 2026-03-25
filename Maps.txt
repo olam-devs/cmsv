@@ -1,0 +1,229 @@
+mtaa
+A package consisting of all Tanzania locations from region to streets in an easily accessible way
+
+View on GitHub
+mtaa
+
+A package consisting of all Tanzania locations from region to streets in a easy accessible way made by kalebu
+
+Become a patron
+
+A strory behind
+
+Mtaa package is result of organized json of all the locations in Tanzania, As I was looking for data about these locations data I came across repo tanzania-location-db, It consists of locations data organized into regions, whereby each region has its own csv file. So I wrote a script to transform all the locations from csv into a single Json and from there package came.
+
+Here a script(Json Transformer)
+
+If you wanna give a look at the script or interested about building your Json from a similar kind of raw data here is Json Transformer script.
+
+Installation
+
+Use pip to install it just as shown below;
+
+pip install mtaa
+Getting started (Usage)
+
+The library is very straight forward, at the very top of the library is country which is tanzania and at the very bottoms are places in a given street, here is a sample;
+
+>>> from mtaa import tanzania
+
+>>> tanzania
+['Shinyanga', 'Mara', 'Dar-es-salaam', 'Kilimanjaro', 'Kagera', 'Tanga', 'Mwanza', 'Tabora', 'Kigoma', 'Pwani', 'Ruvuma', 'Mtwara', 'Morogoro', 'Rukwa', 'Katavi', 'Simiyu', 'Geita', 'Arusha', 'Iringa', 'Mbeya', 'Njombe', 'Manyara', 'Lindi', 'Singida', 'Songwe', 'Dodoma']
+
+>>> tanzania.Mbeya.districts
+['Mbeya cbd', 'Mbeya', 'Rungwe', 'Mbarali', 'Kyela', 'Chunya]
+ 
+ 
+>>> tanzania.Mbeya.districts.Rungwe.wards
+['ward_post_code', 'Bulyaga', 'Bagamoyo', 'Makandana', 'Msasani', 'Kawetele', 'Itagata', 'Ibigi', 'Kyimo', 'Suma', 'Masoko', 'Mpuguso', 'Malindo', 'Lufingo', 'Kiwira', 'Nkunga', 'Ikuti', 'Kisondela', 'Ilima', 'Bujela', 'Masukulu', 'Kisiba', 'Kabula', 'Lupata', 'Kambasegela', 'Kisegese', 'Itete', 'Lufilyo', 'Lwangwa', 'Mpombo', 'Isange', 'Kandete', 'Luteba', 'Isongole', 'Kinyala', 'Matwebe', 'Masebe', 'Swaya', 'Iponjola', 'Lupepo', 'Ndanto', 'Ntaba', 'Mpata']
+
+How about the Type?
+
+>>> from mtaa import tanzania
+>>> type(tanzania)
+<class 'mtaa.Tanzania'>
+As you can see the repr() being shown on of the REPL is of type , you can easily convert it into native python datatypes due to the fact its iteratable, as shown in the example below;
+
+>>> from mtaa import tanzania
+>>> list(tanzania)
+['Shinyanga', 'Mara', 'Dar-es-salaam', 'Kilimanjaro', 'Kagera', 'Tanga', 'Mwanza', 'Tabora', 'Kigoma', 'Pwani', 'Ruvuma', 'Mtwara', 'Morogoro', 'Rukwa', 'Katavi', 'Simiyu', 'Geita', 'Arusha', 'Iringa', 'Mbeya', 'Njombe', 'Manyara', 'Lindi', 'Singida', 'Songwe', 'Dodoma']
+Since its Iterable that’s means you can loop through it, but as string for Example;
+
+>>> for district in tanzania.Mbeya.districts:
+...     print(district)
+... 
+Mbeya cbd
+Mbeya
+Rungwe
+Mbarali
+Kyela
+Chunya
+How about Dar-es-salaam ?
+
+In the above example we were able to retreive locations of Mbeya region because, Mbeya is a valid python identifier, when you try to access Dar-es-Salaam it will ofcourse raise you an error just as shown below;
+
+>>> from mtaa import tanzania
+>>> tanzania.Dar-es-salaam
+Traceback (most recent call last):
+  File "<stdin>", line 1, in <module>
+AttributeError: 'Tanzania' object has no attribute 'Dar'
+To resolve this at anypoint where you a location name is an invalid identifier, use get_dict() instead of (.) operator to access it as shown in the example below;
+
+>>> from mtaa import tanzania 
+>>> tanzania.get('Dar-es-salaam').districts
+['Ilala cbd', 'Ilala', 'Kinondoni', 'Temeke', 'Ubungo', 'Kigamboni']
+Fetching the whole tree
+
+Lets you want to extract no just names in a ward but the whole ward and its deeper roots, to do this use the tree () at any given instance with exception of places in streets which are just list;
+
+Here an example (Some places in Tanzania)
+
+>>> home = tanzania.Mbeya.districts.Rungwe.wards.Kiwira.tree()
+>>> print(home)
+{'ward_post_code': '53515', 'streets': {'Mpandapanda': ['Ipoma', 'Kiwira kati', 'Mpandapanda', 'Ilongoboto', 'Isange'], 'Kikota': ['Lukwego', 'Lubwe', "Kang'eng'e", 'Ilamba', 'Kikota', 'Ipande'], 'Ibula': ['Kibumbe', 'Ibula', 'Kanyegele', 'Sanu - salala kalongo', 'Katela'], 'Ilundo': ['Bujinga', 'Ibagha a', 'Buswema', 'Ibagha b', 'Kanyambala', 'Lusungo'], 'Ilolo': ['Ibigi', 'Ilolo', 'Itekele', 'Masebe', 'Masugwa', 'Kisungu']}}
+
+Grouped Locations
+
+You can also access grouped locations such as all districts, wards and street as shown below;
+
+>>> import mtaa
+>>> mtaa.wards
+......
+>>> len(mtaa.wards)
+3964
+>>> mtaa.districts
+......
+>>> len(mtaa.districts)
+158
+>>>mtaa.streets
+.....
+>>> len(mtaa.streets)
+16741
+From other languages ?
+
+Incase you’re from other languages than Python you might wanna take a look at these general purpose APIS
+
+MtaaAPI
+Location-api
+Give it a star
+
+If you found this repository useful, give it a star so as the whole galaxy of developer can get to know it, you can also keep in touch with me on twitter.
+
+Bug bounty?
+
+If you encounter issue with the usage of the package, feel free raise an issue so as we can fix it as soon as possible(ASAP) or just reach me directly through email isaackeinstein(at)gmail.com.
+
+Pull Requests
+
+If you have something to add I welcome pull requests on improvement , you’re helpful contribution will be merged as soon as possible
+
+Disclaimer
+
+All the location I used to build this repository, I got from an public repository titled tanzania-locations-db, I’m not responsible for any kind of misinformation in it, I tried to locate my home with it found its pretty accurate, so use it to your own risk
+
+Credits
+
+All the credits to ;
+
+kalebu
+HackEAC
+Future contributors
+Related Opensource Projects
+
+MtaaAPI
+rgeocode
+Reverse geocoder
+tanzaniageodata
+
+https://github.com/HackEAC/tanzania-locations-db
+https://github.com/HackEAC/mtaaAPI
+https://github.com/HackEAC/locations-API
+
+also another article had these details below
+Maps
+Need a map and not sure where to start?
+
+Answer 5 quick questions to discover the right map for your needs.
+GET STARTED
+BLOG
+
+EDITORIAL
+7 free map APIs compared to Google Maps
+MAMATA AKELLA
+MAMATA AKELLA
+THURSDAY, OCTOBER 30, 2025
+Discover the best free map APIs for developers and learn how they compare to Google Maps API to improve your app development projects.
+
+Free APIs for maps: The top no-cost alternatives to Google Maps
+Maps power countless apps, from store locators to delivery tracking. Instead of building tools in-house, developers rely on map application programming interfaces (APIs) to add directions, navigation, and visualization features.Google Maps is the most recognized provider, but it isn’t the only one. Several free map APIs offer a starting point to experiment without upfront costs. In this article, you’ll learn about Google Maps alternatives, their limits, and how they run within your app. And when you outgrow them, a platform like Felt offers a scalable, collaborative path forward.
+What are map APIs and why do developers use them?
+
+An API for maps is a tool that connects your app to a mapping service. It lets you show locations, routes, and data in real time without having to build these features manually.For example, a food delivery app uses a map API to show nearby restaurants and track the driver’s location. As a developer, you can use map APIs for:
+Location search: Help people find addresses and points of interest.
+Routing: Create directions between two points and find the fastest route for walking, driving, or cycling.
+Geocoding: Convert street addresses into coordinates (and vice versa) to connect real-world data to the digital map.
+Visualization: Display interactive maps, pins, and heatmaps that make spatial data easier to explore and understand.
+While open-source map APIs save time, they also come with trade-offs. For example, most free plans impose daily limits and licensing limitations.
+Key factors to consider when choosing a free map API
+
+‍The right map API depends on your current needs and future goals around growth. Here are a few tips to help evaluate options.
+Scalability
+
+Free APIs are great for testing and early-stage projects, but many have usage limits — like a maximum number of map loads per day. If your app gains new users quickly, those limits can cap scalability. Look for APIs that offer an easy way to upgrade later. When the time comes, you won’t need to rebuild your entire mapping setup when you outgrow the free plan.
+Data accuracy and coverage
+
+Not all APIs use the same data sources. Google Maps is known for its comprehensive global coverage, but other APIs may offer better local updates thanks to their community contributions. Accurate, consistently updated data means your routes and points of interest reflect current real-world conditions.
+Ease of integration
+
+Some APIs need complex authentication or manual configuration, while others provide simple copy-paste snippets. Check for documentation, code samples, and software developer kits (SDKs) that make it easy to get started. A strong developer experience with a shorter learning curve can save hours of setup.
+Licensing and restrictions
+
+Free map APIs have restrictions, including licensing terms that limit commercial use, data storage, and how you display maps in your app. Some providers require attribution or logo placements. Review the terms and conditions of each provider early, especially if your app and projects could move from personal to commercial use in the long term.
+Performance and latency
+
+Slow maps increase bounce rates. Check how quickly the first map loads, how smooth panning and zooming feels, and fast results for search and routing. Performance can vary by location and datasets, so test with real data from your most common use cases and in the regions you typically serve.
+Privacy and compliance
+
+Maps can reveal sensitive patterns about people, like where they live and work. Review how map providers collect data by default, how long they store it, and where they store it. Look for APIs that have settings to turn off extra tracking and keep data in specific regions. Some providers restrict storing geocodes in your own database, which can affect analytics, so confirm you’re allowed to keep results and that users can opt out on request.
+7 best free map API alternatives to Google Maps
+
+Here are the top free mapping APIs — other than Google. Each comes with different solutions to fit various technical needs and growth plans.
+MapKit (Apple Maps)
+MapKit lets you add Apple Maps to web and native apps with basemaps, search functionality, and directions. The web SDK, called MapKit JS, includes a generous free daily limit of 250,000 map views and 25,000 service calls per Apple Developer Program account.
+Felt makes mapping fast, collaborative, and simple.
+Centralize layers, comments, and decisions in one place
+TRY FELT NOWBefore creating maps, you’ll have to generate a JSON Web Token (JWT) from a Maps ID, add a private key, and initialize MapKit JS with an authorization callback.
+OpenStreetMap and OpenLayers
+OpenStreetMap (OSM) offers open map data under the Open Database License (ODbL), and OpenLayers is a popular open-source JS library that renders OSM tiles and supports custom layers. Tiles are small, pre-rendered map sections that typically appear in a grid.You get global coverage, but you’ll benefit from a commercial tile provider or hosting tiles yourself rather than using OSM’s community tile servers for map production. You must provide visible attribution when using OSM tiles.
+Mapbox
+Mapbox provides vector tiles, geocoding, and routing. Its data merges OSM with commercial and other open sources for improved coverage. Web pricing typically includes map loads, but it requires proper logo or text attribution when you use its maps, data, or software.
+HERE Technologies
+HERE offers enterprise-grade mapping features, including traffic data, geocoding, and navigation. Its web-based SDKs support location search and address validation. The base plan is free with pay-as-you-grow limits. To get started, create a free map API key, load the HERE Maps JS, and initialize a new map object using their SDK. Because pricing can change over time, it’s important to review the latest documentation before committing to long-term use.
+Geoapify
+Geoapify packs OSM tiles and other features like geocoding, routing, and places into an API key. The free plan allows limited commercial use, making it friendly for prototypes and small apps. It provides 3,000 credits per day, but you can upgrade to a paid plan. Implementation is easy: Sign up for an API key and drop their tile URL into OpenLayers or a similar JS library.
+MapLibre
+MapLibre GL JS is an open-source, community-driven fork of Mapbox GL JS v1, which runs in your browser. It creates interactive maps from vector tiles without licensing restrictions. There’s also MapLibre Native, which brings the same model to the iOS and Android mobile operating systems.
+TomTom Maps
+TomTom has a generous freemium tier, with 50,000 free tile requests and 2,500 free non-tile requests per day. Getting started is as easy as creating an account and an API key and initializing a map. You can add traffic, search, and routing as necessary. However, heavy geocoding or routing can hit limits, and you’ll need to follow attribution.
+Go beyond free map APIs with Felt
+
+
+USE FELT'S SDKS AND APIS TO BUILD NATIVE APPLICATIONS.
+Free map APIs are great for experimenting with spatial data, especially when you’re looking for alternatives to Google Maps. You can experiment with mapping, build early prototypes for your app, and understand how features fit into your product. However, you’ll start to notice limitations as your app grows.Felt offers a more scalable solution. And with a seven-day free trial period, you can explore our Enterprise plan with no risk. As a cloud-native web GIS, Felt runs entirely in your browser and visualizes millions of features instantly. AI turns raw data into insights, and you can share everything with your team in real time. Our SDK lets you embed maps you create with Felt into your existing maps, then control them programmatically. With our extensions, you can build custom tools directly within the platform, with integration options for external APIs such as Mapbox and TomTom. Start building your apps with Felt and unlock fast mapping and instant collaboration.
+FAQ
+
+Is there a free alternative to Google Maps API?
+
+There are several free alternatives to Google Maps API. Most of these options offer basic features like basemaps, geocoding, and routing without any upfront costs. However, they also have usage limits or strict licensing rules. Top options include:
+MapKit
+OpenStreetMap (OSM)
+Mapbox
+HERE Technologies
+Geoapify
+MapLibre
+What is the best free map API for developers?
+
+It depends on your needs. Mapbox is great for cross-platform SDKs, while OSM and MapLibre provide open-source flexibility. HERE Technologies offers excellent routing features, especially for traffic-heavy apps. Meanwhile, Geoapify has high free-usage limits for OSM-based projects. If you want to scale efficiently without worrying about limitations, consider using Felt — an AI-powered, cloud-native alternative that can help you start and grow as you go.
+Can free map APIs be used for commercial projects?
+
+Some map APIs, like Geoapify and HERE Technologies, allow limited commercial use within their free plans. OpenStreetMap requires attribution and may restrict heavy or high-traffic usage unless you host the map server yourself.

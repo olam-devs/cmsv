@@ -1,0 +1,459 @@
+Mobile SMS
+Send message using Android-based SMS gateway directly from multiple SIM cards and Android phones. Message is sent using SIM card number.
+
+Registered gateway accounts are needed before sending message. To register gateway account, login to your dashboard, Channels (Menu) -> Mobile Channel (Menu) -> Android Gateway (Menu)
+
+If you have multiple active gateway accounts and sim card numbers, system will distribute messages to all sim cards in round-robin algorithm.
+
+All users subscribed to the mobile network which your SIM card number can send message will receive message.
+
+AUTHORIZATION
+Bearer Token
+This folder is using Bearer Token from collectionMessaging Service API V2
+Send Sms
+In a few simple steps, we will explain how to send an SMS using HTTPS API.
+
+Firstly, you'll need a valid account. When you sign up for the account, you will set a username and password. Next, while logged to your account navigate to Customer Profile (Top Menu Right) -> Customization (Tab) -> API Keys (Tab) to get access token as described in the Authorization Section:
+
+The message will be sent only to a valid phone number (numbers), written in international format e.g. 255738234345. We strongly recommend using the E.164 number formatting. E.164 numbers are internationally standardized to a fifteen digit maximum length. Phone numbers are usually prefixed with + (plus sign), followed by a country code, network code and the subscriber number. Phone numbers that are not E.164 formatted may work, depending on the handset or network.
+
+When sending a message you can specify reference value which associates the API request payload with your data. This is very useful when fetching delivery reports and logs. This is also useful when at any circumstance the requester does not receive a response from the API endpoint and wants to synchronise information at some point later.
+
+AUTHORIZATION
+Bearer Token
+This folder is using Bearer Token from collectionMessaging Service API V2
+POST
+Single message
+https://messaging-service.co.tz/api/mobile/v2/text/single
+Now, you are ready to send your first SMS message using:
+
+POST https://messaging-service.co.tz/api/mobile/v2/text/single
+
+Examples
+Sample Payload for Single Destination
+
+View More
+json
+{
+    "to": "255716718040",
+    "text": "Habari, kikao cha harusi ni leo saa kumi jioni pale Vijana Hall.",
+    "reference": "xaefcgt"
+}
+Sample Payload for Multiple Destinations
+
+View More
+json
+{
+    "to": [
+        "255716718040",
+        "255678892341"
+    ],
+    "text": "Habari, kikao cha harusi ni leo saa kumi jioni pale Vijana Hall.",
+    "reference": "xaefcgt"
+}
+For testing your requests during development, use the URL below:
+POST https://messaging-service.co.tz/api/mobile/v2/test/text/single
+Note: No message(s) will be sent when using the test URL
+
+AUTHORIZATION
+Bearer Token
+This request is using Bearer Token from collectionMessaging Service API V2
+HEADERS
+Authorization
+Bearer cedcce9becad866f59beac1fd5a235bc
+
+Content-Type
+application/json
+
+Accept
+application/json
+
+Body
+raw
+View More
+{
+    "to": "255678892341",
+    "text": "Habari, kikao cha harusi ni leo saa kumi jioni pale Vijana Hall.",
+    "reference": "xaefcgt"
+}
+Example Request
+Single destination
+View More
+curl
+curl --location 'https://messaging-service.co.tz/api/mobile/v2/text/single' \
+--header 'Authorization: Bearer cedcce9becad866f59beac1fd5a235bc' \
+--header 'Content-Type: application/json' \
+--header 'Accept: application/json' \
+--data '{
+    "to": "255716718040",
+    "text": "Habari, kikao cha harusi ni leo saa kumi jioni pale Vijana Hall.",
+    "reference": "xaefcgt"
+}'
+200 OK
+Example Response
+Body
+Headers (16)
+View More
+json
+{
+  "messages": [
+    {
+      "to": "255716718040",
+      "status": {
+        "groupId": 18,
+        "groupName": "PENDING",
+        "id": 51,
+        "name": "ENROUTE (SENT)",
+        "description": "Message sent to next instance"
+      },
+      "messageId": 5955619888423745000,
+      "message": "Habari, kikao cha harusi ni leo saa kumi jioni pale Vijana Hall.",
+      "smsCount": 1,
+      "price": 3
+    }
+  ]
+}
+POST
+Multiple messages
+https://messaging-service.co.tz/api/mobile/v2/text/multi
+For sending the multiple messages to multiple phone numbers, you need to perform:
+
+POST https://messaging-service.co.tz/api/mobile/v2/text/multi
+
+Examples
+Sample Payload for Single Destination (Each message):
+
+View More
+json
+{
+    "messages": [
+        {
+            "to": "255716718040",
+            "text": "Habari, kikao cha harusi ni leo saa kumi jioni pale Vijana Hall."
+        },
+        {
+            "to": "255787275482",
+            "text": "Habari, unakumbushwa kutoa mchango wa ahadi yako"
+        }
+    ],
+    "reference": "aswqetgcv"
+}
+Sample Payload for Multiple Destinations (Each message):
+
+View More
+json
+{
+    "messages": [
+        {
+            "to": [
+                "255716718040",
+                "255675892345"
+            ],
+            "text": "Habari, kikao cha harusi ni leo saa kumi jioni pale Vijana Hall."
+        },
+        {
+            "to": [
+                "255787275482",
+                "255615785765"
+            ],
+            "text": "Habari, unakumbushwa kutoa mchango wa ahadi yako"
+        }
+    ],
+    "reference": "aswqetgcv"
+}
+For testing your requests during development, use the URL below:
+POST https://messaging-service.co.tz/api/sms/v2/test/text/multi
+Note: No message(s) will be sent when using the test URL
+
+AUTHORIZATION
+Bearer Token
+This request is using Bearer Token from collectionMessaging Service API V2
+HEADERS
+Authorization
+Bearer cedcce9becad866f59beac1fd5a235bc
+
+Content-Type
+application/json
+
+Accept
+application/json
+
+Body
+raw
+View More
+{
+    "messages": [
+        {
+            "to": "255675892345",
+            "text": "Habari, kikao cha harusi ni leo saa kumi jioni pale Vijana Hall."
+        },
+        {
+            "to": "255615785765",
+            "text": "Habari, unakumbushwa kutoa mchango wa ahadi yako"
+        }
+    ],
+    "reference": "aswqetgcv"
+}
+Example Request
+Single Destination
+View More
+curl
+curl --location 'https://messaging-service.co.tz/api/mobile/v2/text/multi' \
+--header 'Authorization: Bearer cedcce9becad866f59beac1fd5a235bc' \
+--header 'Content-Type: application/json' \
+--header 'Accept: application/json' \
+--data '{
+    "messages": [
+        {
+            "to": "255716718040",
+            "text": "Habari, kikao cha harusi ni leo saa kumi jioni pale Vijana Hall."
+        },
+        {
+            "to": "255787275482",
+            "text": "Habari, unakumbushwa kutoa mchango wa ahadi yako"
+        }
+    ],
+    "reference": "aswqetgcv"
+}'
+200 OK
+Example Response
+Body
+Headers (16)
+View More
+json
+{
+  "messages": [
+    {
+      "to": "255716718040",
+      "status": {
+        "groupId": 18,
+        "groupName": "PENDING",
+        "id": 51,
+        "name": "ENROUTE (SENT)",
+        "description": "Message sent to next instance"
+      },
+      "messageId": 46879726967068510,
+      "message": "Habari, kikao cha harusi ni leo saa kumi jioni pale Vijana Hall.",
+      "smsCount": 1,
+      "price": 3
+    },
+    {
+      "to": "255787275482",
+      "status": {
+        "groupId": 18,
+        "groupName": "PENDING",
+        "id": 51,
+        "name": "ENROUTE (SENT)",
+        "description": "Message sent to next instance"
+      },
+      "messageId": 347487849865968900,
+      "message": "Habari, unakumbushwa kutoa mchango wa ahadi yako",
+      "smsCount": 1,
+      "price": 3
+    }
+  ]
+}
+GET
+Get all delivery reports
+https://messaging-service.co.tz/api/v2/reports?size=3
+AUTHORIZATION
+Bearer Token
+This request is using Bearer Token from collectionMessaging Service API V2
+HEADERS
+Authorization
+Bearer cedcce9becad866f59beac1fd5a235bc
+
+Content-Type
+application/json
+
+Accept
+application/json
+
+PARAMS
+size
+3
+
+Example Request
+Get all delivery reports
+curl
+curl --location 'https://messaging-service.co.tz/api/v2/reports?size=3' \
+--header 'Authorization: Bearer cedcce9becad866f59beac1fd5a235bc' \
+--header 'Content-Type: application/json' \
+--header 'Accept: application/json' \
+--data ''
+200 OK
+Example Response
+Body
+Headers (16)
+View More
+json
+{
+  "results": [
+    {
+      "messageId": "4406068643096710389",
+      "reference": null,
+      "sentAt": "2025-04-01 23:46:00",
+      "doneAt": "2025-04-01 23:46:53",
+      "to": "255615806045",
+      "channel": "Mobile SMS",
+      "from": null,
+      "smsCount": 1,
+      "status": {
+        "groupId": 20,
+        "groupName": "DELIVERED",
+        "id": 73,
+        "name": "DELIVERED"
+      },
+      "delivery": "DELIVERED",
+      "text": "Hello, this is Erick.",
+      "deliveryId": 12480067
+    },
+    {
+      "messageId": "6948006264327328216",
+      "reference": null,
+      "sentAt": "2025-04-02 12:59:00",
+      "doneAt": "2025-04-02 13:00:08",
+      "to": "255745668527",
+      "channel": "Mobile SMS",
+      "from": null,
+      "smsCount": 1,
+      "status": {
+        "groupId": 20,
+        "groupName": "DELIVERED",
+        "id": 73,
+        "name": "DELIVERED"
+      },
+      "delivery": "DELIVERED",
+      "text": "Hello Nextbyte",
+      "deliveryId": 12480068
+    },
+    {
+      "messageId": "6690904723145429036",
+      "reference": null,
+      "sentAt": "2025-04-02 12:59:00",
+      "doneAt": "2025-04-02 13:00:21",
+      "to": "255719123671",
+      "channel": "Mobile SMS",
+      "from": null,
+      "smsCount": 1,
+      "status": {
+        "groupId": 20,
+        "groupName": "DELIVERED",
+        "id": 73,
+        "name": "DELIVERED"
+      },
+      "delivery": "DELIVERED",
+      "text": "Hello Nextbyte",
+      "deliveryId": 12480069
+    }
+  ]
+}
+
+GET
+Get all sent SMS logs with optional parameter
+https://messaging-service.co.tz/api/v2/logs?from=TANZANIATIP&to=255716718040&sentSince=2025-03-01&sentUntil=2025-05-21
+you might need some filters to search through them. The filters you can use are:
+
+from:
+Sender ID name.
+
+to:
+Destination (Phone number starting with 255).
+
+sentSince: Date.
+Lower limit on date and time of sending SMS.
+
+sentUntil: Date.
+Upper limit on date and time of sending SMS.
+
+offset: To skip a given number of results in the report. This must be an integer.
+
+limit: To limit the number of results returned use limit, this must be an integer (Maximum allowed is 500).
+
+Using parameters is optional you can just use the provided API url to get all of your sent sms logs.
+
+reference:
+
+This is the special value which was used during sending a message to associate the sent message with specific API request values.
+
+AUTHORIZATION
+Bearer Token
+This request is using Bearer Token from collectionMessaging Service API V2
+HEADERS
+Authorization
+Bearer cedcce9becad866f59beac1fd5a235bc
+
+Content-Type
+application/json
+
+Accept
+application/json
+
+PARAMS
+from
+TANZANIATIP
+
+to
+255716718040
+
+sentSince
+2025-03-01
+
+sentUntil
+2025-05-21
+
+Example Request
+Get all sent SMS logs with optional parameter
+View More
+curl
+curl --location 'https://messaging-service.co.tz/api/v2/logs?from=TANZANIATIP&to=255716718040&sentSince=2025-03-01&sentUntil=2025-05-21' \
+--header 'Authorization: Bearer cedcce9becad866f59beac1fd5a235bc' \
+--header 'Content-Type: application/json' \
+--header 'Accept: application/json' \
+--data ''
+200 OK
+Example Response
+Body
+Headers (16)
+View More
+json
+{
+  "results": [
+    {
+      "messageId": "753949890101740822",
+      "reference": null,
+      "sentAt": "2025-05-08 14:00:00",
+      "doneAt": "2025-05-08 14:00:00",
+      "to": "255716718040",
+      "channel": "Internet SMS (Scheduled)",
+      "from": "TANZANIATIP",
+      "smsCount": 1,
+      "status": {
+        "groupId": 18,
+        "groupName": "ACCEPTED",
+        "id": 52,
+        "name": "ACCEPTED"
+      },
+      "delivery": null
+    },
+    {
+      "messageId": "4573599445566835235",
+      "reference": null,
+      "sentAt": "2025-05-08 14:00:00",
+      "doneAt": "2025-05-08 14:00:00",
+      "to": "255716718040",
+      "channel": "Internet SMS (Scheduled)",
+      "from": "TANZANIATIP",
+      "smsCount": 1,
+      "status": {
+        "groupId": 18,
+        "groupName": "ACCEPTED",
+        "id": 52,
+        "name": "ACCEPTED"
+      },
+      "delivery": null
+    },
+    {
+      "messageId": "5349233282054922621",
+      "reference": null,
+      "sentAt": "2025-05

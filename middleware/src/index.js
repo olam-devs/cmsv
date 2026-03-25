@@ -16,6 +16,7 @@ const hourlyReport   = require('./services/hourly-report.service');
 const path           = require('path');
 const http           = require('http');
 
+const net  = require('net');
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
@@ -139,7 +140,9 @@ app.get('/api/video/hls', async (req, res) => {
     const { devIdno, channel, stream, jsession } = req.query;
     const host = (process.env.CMSV6_BASE_URL || 'http://13.53.215.88').replace(/^https?:\/\//, '');
     const port = process.env.CMSV6_VIDEO_PORT || 6604;
-    const m3u8Url = `http://${host}:${port}/hls/1_${devIdno}_${channel}_${stream}.m3u8?jsession=${jsession}`;
+    // CMSV6 HLS uses 0-based channel index in the stream filename
+    const ch0 = Math.max(0, parseInt(channel || 1) - 1);
+    const m3u8Url = `http://${host}:${port}/hls/1_${devIdno}_${ch0}_${stream}.m3u8?jsession=${jsession}`;
     const r = await fetch(m3u8Url);
     if (!r.ok) return res.status(r.status).end();
     const text = await r.text();
@@ -264,7 +267,7 @@ app.use((err, req, res, _next) => {
 });
 
 // ── Start ─────────────────────────────────────────────────────────────────
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   monitor.start();
   hourlyReport.start();
   logger.info(`\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
@@ -276,6 +279,36 @@ app.listen(PORT, () => {
   logger.info(` Health:      http://localhost:${PORT}/health`);
   logger.info(` Fleet:       http://localhost:${PORT}/api/fleet/snapshot`);
   logger.info(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
+});
+
+// ── WebSocket proxy for CMSV6 video stream (port 6604) ───────────────────
+// CMSV6's Jessibuca player connects via ws:// to port 6604 for FLV streams.
+// We rewrite those URLs to /api/video/stream in the HTML, then tunnel the
+// WebSocket upgrade here as raw TCP to 13.53.215.88:6604.
+server.on('upgrade', (req, socket, head) => {
+  if (!req.url.startsWith('/api/video/stream')) {
+    socket.destroy();
+    return;
+  }
+  const cmsHost   = getCmsHost();
+  const targetPath = req.url.replace('/api/video/stream', '') || '/';
+
+  const upstream = net.connect({ host: cmsHost, port: 6604 }, () => {
+    // Re-send the HTTP Upgrade handshake to CMSV6 with the correct host
+    const lines = [`${req.method} ${targetPath} HTTP/1.1`];
+    for (const [k, v] of Object.entries(req.headers)) {
+      lines.push(k.toLowerCase() === 'host' ? `host: ${cmsHost}:6604` : `${k}: ${v}`);
+    }
+    lines.push('', '');
+    upstream.write(lines.join('\r\n'));
+    if (head && head.length) upstream.write(head);
+    // Bidirectional pipe — raw WebSocket frames flow through unchanged
+    upstream.pipe(socket);
+    socket.pipe(upstream);
+  });
+
+  upstream.on('error', () => { try { socket.destroy(); } catch (_) {} });
+  socket.on('error', () => { try { upstream.destroy(); } catch (_) {} });
 });
 
 module.exports = app;

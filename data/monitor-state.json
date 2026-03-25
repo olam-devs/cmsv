@@ -1,0 +1,1095 @@
+{
+  "dailyStats": {
+    "14682601177": {
+      "date": "2026-03-25",
+      "fuelStartOfDay": 216.47,
+      "totalUptimeSecs": 0,
+      "totalFuelConsumedDuringOff": 0,
+      "lastAccOnTime": 1774386010347
+    },
+    "14682601263": {
+      "date": "2026-03-25",
+      "fuelStartOfDay": 2532.72,
+      "totalUptimeSecs": 4906,
+      "totalFuelConsumedDuringOff": 27,
+      "lastAccOnTime": null
+    },
+    "14682601264": {
+      "date": "2026-03-25",
+      "fuelStartOfDay": 1887.12,
+      "totalUptimeSecs": 6845,
+      "totalFuelConsumedDuringOff": 2369.5,
+      "lastAccOnTime": 1774458837154
+    },
+    "14682601265": {
+      "date": "2026-03-25",
+      "fuelStartOfDay": 995.56,
+      "totalUptimeSecs": 7594,
+      "totalFuelConsumedDuringOff": 0,
+      "lastAccOnTime": null
+    },
+    "14682601266": {
+      "date": "2026-03-25",
+      "fuelStartOfDay": null,
+      "totalUptimeSecs": 0,
+      "totalFuelConsumedDuringOff": 0,
+      "lastAccOnTime": 1774386010347
+    },
+    "14682601267": {
+      "date": "2026-03-25",
+      "fuelStartOfDay": null,
+      "totalUptimeSecs": 8900,
+      "totalFuelConsumedDuringOff": 0,
+      "lastAccOnTime": null
+    }
+  },
+  "eventHistory": [
+    {
+      "type": "acc_on",
+      "plate": "T972EHX",
+      "vehicleName": "T972EHX",
+      "devIdno": "14682601264",
+      "fuel": 340,
+      "time": "2026-03-25T17:13:57.154Z",
+      "downtimeSecs": 5451,
+      "downtimeStr": "1h 30m",
+      "fuelConsumedDuringOff": 137,
+      "lat": -6.519089,
+      "lng": 38.272337
+    },
+    {
+      "type": "acc_off",
+      "plate": "T972EHX",
+      "vehicleName": "T972EHX",
+      "devIdno": "14682601264",
+      "fuel": 477,
+      "fuelAtStart": 482,
+      "fuelUsed": 5,
+      "time": "2026-03-25T15:43:06.228Z",
+      "uptimeSecs": 15,
+      "uptimeStr": "15s",
+      "lat": -6.519069,
+      "lng": 38.27228
+    },
+    {
+      "type": "acc_on",
+      "plate": "T972EHX",
+      "vehicleName": "T972EHX",
+      "devIdno": "14682601264",
+      "fuel": 482,
+      "time": "2026-03-25T15:42:51.174Z",
+      "downtimeSecs": 6003,
+      "downtimeStr": "1h 40m",
+      "fuelConsumedDuringOff": 425,
+      "lat": -6.519069,
+      "lng": 38.27228
+    },
+    {
+      "type": "acc_off",
+      "plate": "T162EHC",
+      "vehicleName": "T162EHC",
+      "devIdno": "14682601267",
+      "fuel": 0,
+      "fuelAtStart": 0,
+      "fuelUsed": 0,
+      "time": "2026-03-25T14:24:18.575Z",
+      "uptimeSecs": 8900,
+      "uptimeStr": "2h 28m",
+      "lat": -6.504137,
+      "lng": 38.239862
+    },
+    {
+      "type": "acc_off",
+      "plate": "T972EHX",
+      "vehicleName": "T972EHX",
+      "devIdno": "14682601264",
+      "fuel": 907,
+      "fuelAtStart": 530,
+      "fuelUsed": -377,
+      "time": "2026-03-25T14:02:47.943Z",
+      "uptimeSecs": 330,
+      "uptimeStr": "5m 30s",
+      "lat": -6.519069,
+      "lng": 38.27228
+    },
+    {
+      "type": "vehicle_offline",
+      "plate": "T245EHC",
+      "vehicleName": "T245EHC",
+      "devIdno": "14682601265",
+      "fuel": 1189.6,
+      "time": "2026-03-25T13:58:04.409Z",
+      "lat": -6.504158,
+      "lng": 38.239625
+    },
+    {
+      "type": "acc_on",
+      "plate": "T972EHX",
+      "vehicleName": "T972EHX",
+      "devIdno": "14682601264",
+      "fuel": 530,
+      "time": "2026-03-25T13:57:17.633Z",
+      "downtimeSecs": 525,
+      "downtimeStr": "8m 45s",
+      "fuelConsumedDuringOff": 498,
+      "lat": -6.519079,
+      "lng": 38.272278
+    },
+    {
+      "type": "acc_off",
+      "plate": "T245EHC",
+      "vehicleName": "T245EHC",
+      "devIdno": "14682601265",
+      "fuel": 1189.6,
+      "fuelAtStart": 1008.6,
+      "fuelUsed": -181,
+      "time": "2026-03-25T13:54:17.595Z",
+      "uptimeSecs": 7594,
+      "uptimeStr": "2h 6m",
+      "lat": -6.504158,
+      "lng": 38.239625
+    },
+    {
+      "type": "acc_off",
+      "plate": "T972EHX",
+      "vehicleName": "T972EHX",
+      "devIdno": "14682601264",
+      "fuel": 1028,
+      "fuelAtStart": 900,
+      "fuelUsed": -128,
+      "time": "2026-03-25T13:48:32.440Z",
+      "uptimeSecs": 976,
+      "uptimeStr": "16m 16s",
+      "lat": -6.519079,
+      "lng": 38.272278
+    },
+    {
+      "type": "acc_on",
+      "plate": "T972EHX",
+      "vehicleName": "T972EHX",
+      "devIdno": "14682601264",
+      "fuel": 900,
+      "time": "2026-03-25T13:32:16.727Z",
+      "downtimeSecs": 810,
+      "downtimeStr": "13m 30s",
+      "fuelConsumedDuringOff": null,
+      "lat": -6.519139,
+      "lng": 38.272242
+    },
+    {
+      "type": "acc_off",
+      "plate": "T406EBQ",
+      "vehicleName": "T406EBQ",
+      "devIdno": "14682601263",
+      "fuel": 2210.7,
+      "fuelAtStart": 2503.7,
+      "fuelUsed": 293,
+      "time": "2026-03-25T13:22:31.297Z",
+      "uptimeSecs": 4758,
+      "uptimeStr": "1h 19m",
+      "lat": -6.503958,
+      "lng": 38.239449
+    },
+    {
+      "type": "acc_off",
+      "plate": "T972EHX",
+      "vehicleName": "T972EHX",
+      "devIdno": "14682601264",
+      "fuel": 519,
+      "fuelAtStart": 925,
+      "fuelUsed": 406,
+      "time": "2026-03-25T13:18:46.305Z",
+      "uptimeSecs": 931,
+      "uptimeStr": "15m 31s",
+      "lat": -6.519139,
+      "lng": 38.272242
+    },
+    {
+      "type": "acc_on",
+      "plate": "T972EHX",
+      "vehicleName": "T972EHX",
+      "devIdno": "14682601264",
+      "fuel": 925,
+      "time": "2026-03-25T13:03:15.702Z",
+      "downtimeSecs": 120,
+      "downtimeStr": "2m 0s",
+      "fuelConsumedDuringOff": 182,
+      "lat": -6.51906,
+      "lng": 38.272155
+    },
+    {
+      "type": "acc_off",
+      "plate": "T972EHX",
+      "vehicleName": "T972EHX",
+      "devIdno": "14682601264",
+      "fuel": 1107,
+      "fuelAtStart": 759.6,
+      "fuelUsed": -347.4,
+      "time": "2026-03-25T13:01:15.813Z",
+      "uptimeSecs": 4593,
+      "uptimeStr": "1h 16m",
+      "lat": -6.51906,
+      "lng": 38.272155
+    },
+    {
+      "type": "acc_on",
+      "plate": "T406EBQ",
+      "vehicleName": "T406EBQ",
+      "devIdno": "14682601263",
+      "fuel": 2503.7,
+      "time": "2026-03-25T12:03:12.851Z",
+      "downtimeSecs": 914,
+      "downtimeStr": "15m 14s",
+      "fuelConsumedDuringOff": 27,
+      "lat": -6.503701,
+      "lng": 38.239599
+    },
+    {
+      "type": "acc_on",
+      "plate": "T162EHC",
+      "vehicleName": "T162EHC",
+      "devIdno": "14682601267",
+      "fuel": 0,
+      "time": "2026-03-25T11:55:58.250Z",
+      "downtimeSecs": 73607,
+      "downtimeStr": "20h 26m",
+      "fuelConsumedDuringOff": null,
+      "lat": -6.504154,
+      "lng": 38.239878
+    },
+    {
+      "type": "acc_off",
+      "plate": "T406EBQ",
+      "vehicleName": "T406EBQ",
+      "devIdno": "14682601263",
+      "fuel": 2530.7,
+      "fuelAtStart": 2530.7,
+      "fuelUsed": 0,
+      "time": "2026-03-25T11:47:58.604Z",
+      "uptimeSecs": 148,
+      "uptimeStr": "2m 28s",
+      "lat": -6.503701,
+      "lng": 38.239599
+    },
+    {
+      "type": "acc_on",
+      "plate": "T245EHC",
+      "vehicleName": "T245EHC",
+      "devIdno": "14682601265",
+      "fuel": 1008.6,
+      "time": "2026-03-25T11:47:43.557Z",
+      "downtimeSecs": 73112,
+      "downtimeStr": "20h 18m",
+      "fuelConsumedDuringOff": null,
+      "lat": -6.5063,
+      "lng": 38.24314
+    },
+    {
+      "type": "acc_on",
+      "plate": "T406EBQ",
+      "vehicleName": "T406EBQ",
+      "devIdno": "14682601263",
+      "fuel": 2530.7,
+      "time": "2026-03-25T11:45:30.225Z",
+      "downtimeSecs": 72979,
+      "downtimeStr": "20h 16m",
+      "fuelConsumedDuringOff": null,
+      "lat": -6.503701,
+      "lng": 38.239599
+    },
+    {
+      "type": "vehicle_online",
+      "plate": "T245EHC",
+      "vehicleName": "T245EHC",
+      "devIdno": "14682601265",
+      "fuel": 1008.6,
+      "time": "2026-03-25T11:44:42.947Z",
+      "offlineSecs": 72932,
+      "offlineStr": "20h 15m",
+      "lat": -6.5063,
+      "lng": 38.24314
+    },
+    {
+      "type": "acc_on",
+      "plate": "T972EHX",
+      "vehicleName": "T972EHX",
+      "devIdno": "14682601264",
+      "fuel": 759.6,
+      "time": "2026-03-25T11:44:42.947Z",
+      "downtimeSecs": 72932,
+      "downtimeStr": "20h 15m",
+      "fuelConsumedDuringOff": 1127.5,
+      "lat": -6.519076,
+      "lng": 38.272144
+    },
+    {
+      "type": "vehicle_online",
+      "plate": "T972EHX",
+      "vehicleName": "T972EHX",
+      "devIdno": "14682601264",
+      "fuel": 759.6,
+      "time": "2026-03-25T11:44:42.947Z",
+      "offlineSecs": 66551,
+      "offlineStr": "18h 29m",
+      "lat": -6.519076,
+      "lng": 38.272144
+    },
+    {
+      "type": "fuel_theft_suspected",
+      "plate": "T972EHX",
+      "vehicleName": "T972EHX",
+      "devIdno": "14682601264",
+      "fuelBefore": 1887.1,
+      "fuelNow": 759.6,
+      "fuelDrop": 1127.5,
+      "time": "2026-03-25T11:44:42.947Z",
+      "offlineSecs": 66551,
+      "offlineStr": "18h 29m",
+      "accOnAtOffline": false,
+      "lat": -6.519076,
+      "lng": 38.272144
+    },
+    {
+      "type": "vehicle_offline",
+      "plate": "T972EHX",
+      "vehicleName": "T972EHX",
+      "devIdno": "14682601264",
+      "fuel": 1887.1,
+      "time": "2026-03-24T17:15:47.050Z",
+      "lat": -6.519006,
+      "lng": 38.27226
+    },
+    {
+      "type": "vehicle_offline",
+      "plate": "T972EHX",
+      "vehicleName": "T972EHX",
+      "devIdno": "14682601264",
+      "fuel": 2391.7,
+      "time": "2026-03-22T12:28:24.412Z"
+    },
+    {
+      "type": "vehicle_offline",
+      "plate": "T245EHC",
+      "vehicleName": "T245EHC",
+      "devIdno": "14682601265",
+      "fuel": 2243.6,
+      "time": "2026-03-21T20:52:52.822Z"
+    },
+    {
+      "type": "vehicle_online",
+      "plate": "T972EHX",
+      "vehicleName": "T972EHX",
+      "devIdno": "14682601264",
+      "fuel": 1676.9,
+      "time": "2026-03-21T10:53:21.064Z",
+      "offlineSecs": 15821,
+      "offlineStr": "4h 23m"
+    },
+    {
+      "type": "vehicle_offline",
+      "plate": "T162EHC",
+      "vehicleName": "T162EHC",
+      "devIdno": "14682601267",
+      "fuel": 0,
+      "time": "2026-03-21T06:29:52.705Z"
+    },
+    {
+      "type": "vehicle_offline",
+      "plate": "T972EHX",
+      "vehicleName": "T972EHX",
+      "devIdno": "14682601264",
+      "fuel": 2597.5,
+      "time": "2026-03-21T06:29:52.705Z"
+    },
+    {
+      "type": "vehicle_online",
+      "plate": "T245EHC",
+      "vehicleName": "T245EHC",
+      "devIdno": "14682601265",
+      "fuel": 995.6,
+      "time": "2026-03-20T10:55:26.978Z",
+      "offlineSecs": 45,
+      "offlineStr": "45s"
+    },
+    {
+      "type": "vehicle_offline",
+      "plate": "T245EHC",
+      "vehicleName": "T245EHC",
+      "devIdno": "14682601265",
+      "fuel": 995.6,
+      "time": "2026-03-20T10:54:56.918Z"
+    },
+    {
+      "type": "vehicle_offline",
+      "plate": "T407EBQ",
+      "vehicleName": "T407EBQ",
+      "devIdno": "14682601266",
+      "fuel": 0,
+      "time": "2026-03-20T10:41:11.397Z"
+    },
+    {
+      "type": "vehicle_online",
+      "plate": "T407EBQ",
+      "vehicleName": "T407EBQ",
+      "devIdno": "14682601266",
+      "fuel": 0,
+      "time": "2026-03-20T10:37:41.223Z",
+      "offlineSecs": 7130,
+      "offlineStr": "1h 58m"
+    },
+    {
+      "type": "vehicle_offline",
+      "plate": "T407EBQ",
+      "vehicleName": "T407EBQ",
+      "devIdno": "14682601266",
+      "fuel": 0,
+      "time": "2026-03-20T08:39:06.643Z"
+    },
+    {
+      "type": "vehicle_online",
+      "plate": "T162EHC",
+      "vehicleName": "T162EHC",
+      "devIdno": "14682601267",
+      "fuel": 0,
+      "time": "2026-03-20T07:59:50.399Z",
+      "offlineSecs": 60,
+      "offlineStr": "1m 0s"
+    },
+    {
+      "type": "vehicle_offline",
+      "plate": "T162EHC",
+      "vehicleName": "T162EHC",
+      "devIdno": "14682601267",
+      "fuel": 0,
+      "time": "2026-03-20T07:59:05.364Z"
+    },
+    {
+      "type": "vehicle_online",
+      "plate": "T162EHC",
+      "vehicleName": "T162EHC",
+      "devIdno": "14682601267",
+      "fuel": 0,
+      "time": "2026-03-20T07:57:20.649Z",
+      "offlineSecs": 41537,
+      "offlineStr": "11h 32m"
+    },
+    {
+      "type": "vehicle_online",
+      "plate": "T407EBQ",
+      "vehicleName": "T407EBQ",
+      "devIdno": "14682601266",
+      "fuel": 0,
+      "time": "2026-03-20T07:57:20.649Z",
+      "offlineSecs": 45860,
+      "offlineStr": "12h 44m"
+    },
+    {
+      "type": "vehicle_online",
+      "plate": "T245EHC",
+      "vehicleName": "T245EHC",
+      "devIdno": "14682601265",
+      "fuel": 995.6,
+      "time": "2026-03-20T07:57:20.649Z",
+      "offlineSecs": 64838,
+      "offlineStr": "18h 0m"
+    },
+    {
+      "type": "vehicle_offline",
+      "plate": "T162EHC",
+      "vehicleName": "T162EHC",
+      "devIdno": "14682601267",
+      "fuel": 0,
+      "time": "2026-03-19T20:25:15.751Z"
+    },
+    {
+      "type": "vehicle_offline",
+      "plate": "T407EBQ",
+      "vehicleName": "T407EBQ",
+      "devIdno": "14682601266",
+      "fuel": 0,
+      "time": "2026-03-19T19:13:16.729Z"
+    },
+    {
+      "type": "vehicle_offline",
+      "plate": "T245EHC",
+      "vehicleName": "T245EHC",
+      "devIdno": "14682601265",
+      "fuel": 1408.7,
+      "time": "2026-03-19T13:56:57.152Z"
+    },
+    {
+      "type": "vehicle_online",
+      "plate": "T407EBQ",
+      "vehicleName": "T407EBQ",
+      "devIdno": "14682601266",
+      "fuel": 0,
+      "time": "2026-03-19T13:26:41.138Z",
+      "offlineSecs": 5779,
+      "offlineStr": "1h 36m"
+    },
+    {
+      "type": "vehicle_offline",
+      "plate": "T407EBQ",
+      "vehicleName": "T407EBQ",
+      "devIdno": "14682601266",
+      "fuel": 0,
+      "time": "2026-03-19T11:50:38.599Z"
+    },
+    {
+      "type": "vehicle_online",
+      "plate": "T407EBQ",
+      "vehicleName": "T407EBQ",
+      "devIdno": "14682601266",
+      "fuel": 0,
+      "time": "2026-03-19T11:39:21.783Z",
+      "offlineSecs": 255,
+      "offlineStr": "4m 15s"
+    },
+    {
+      "type": "vehicle_offline",
+      "plate": "T407EBQ",
+      "vehicleName": "T407EBQ",
+      "devIdno": "14682601266",
+      "fuel": 0,
+      "time": "2026-03-19T11:35:21.584Z"
+    },
+    {
+      "type": "vehicle_online",
+      "plate": "T407EBQ",
+      "vehicleName": "T407EBQ",
+      "devIdno": "14682601266",
+      "fuel": 0,
+      "time": "2026-03-19T11:31:51.497Z",
+      "offlineSecs": 210,
+      "offlineStr": "3m 30s"
+    },
+    {
+      "type": "vehicle_offline",
+      "plate": "T407EBQ",
+      "vehicleName": "T407EBQ",
+      "devIdno": "14682601266",
+      "fuel": 0,
+      "time": "2026-03-19T11:28:36.340Z"
+    },
+    {
+      "type": "vehicle_online",
+      "plate": "T407EBQ",
+      "vehicleName": "T407EBQ",
+      "devIdno": "14682601266",
+      "fuel": 0,
+      "time": "2026-03-19T11:02:05.276Z",
+      "offlineSecs": 1335,
+      "offlineStr": "22m 15s"
+    },
+    {
+      "type": "vehicle_offline",
+      "plate": "T407EBQ",
+      "vehicleName": "T407EBQ",
+      "devIdno": "14682601266",
+      "fuel": 0,
+      "time": "2026-03-19T10:40:04.349Z"
+    },
+    {
+      "type": "vehicle_online",
+      "plate": "T407EBQ",
+      "vehicleName": "T407EBQ",
+      "devIdno": "14682601266",
+      "fuel": 0,
+      "time": "2026-03-19T10:27:33.693Z",
+      "offlineSecs": 12371,
+      "offlineStr": "3h 26m"
+    },
+    {
+      "type": "vehicle_offline",
+      "plate": "T407EBQ",
+      "vehicleName": "T407EBQ",
+      "devIdno": "14682601266",
+      "fuel": 0,
+      "time": "2026-03-19T07:01:37.431Z"
+    },
+    {
+      "type": "vehicle_online",
+      "plate": "T407EBQ",
+      "vehicleName": "T407EBQ",
+      "devIdno": "14682601266",
+      "fuel": 0,
+      "time": "2026-03-19T06:02:25.211Z",
+      "offlineSecs": 30646,
+      "offlineStr": "8h 30m"
+    },
+    {
+      "type": "vehicle_online",
+      "plate": "T245EHC",
+      "vehicleName": "T245EHC",
+      "devIdno": "14682601265",
+      "fuel": 1205.6,
+      "time": "2026-03-19T05:03:37.880Z",
+      "offlineSecs": 48250,
+      "offlineStr": "13h 24m"
+    },
+    {
+      "type": "vehicle_online",
+      "plate": "T162EHC",
+      "vehicleName": "T162EHC",
+      "devIdno": "14682601267",
+      "fuel": 0,
+      "time": "2026-03-19T04:08:20.702Z",
+      "offlineSecs": 23756,
+      "offlineStr": "6h 35m"
+    },
+    {
+      "type": "vehicle_offline",
+      "plate": "T162EHC",
+      "vehicleName": "T162EHC",
+      "devIdno": "14682601267",
+      "fuel": 0,
+      "time": "2026-03-18T21:32:39.369Z"
+    },
+    {
+      "type": "vehicle_offline",
+      "plate": "T407EBQ",
+      "vehicleName": "T407EBQ",
+      "devIdno": "14682601266",
+      "fuel": 0,
+      "time": "2026-03-18T21:31:54.264Z"
+    },
+    {
+      "type": "vehicle_online",
+      "plate": "T407EBQ",
+      "vehicleName": "T407EBQ",
+      "devIdno": "14682601266",
+      "fuel": 0,
+      "time": "2026-03-18T19:18:21.226Z",
+      "offlineSecs": 2311,
+      "offlineStr": "38m 31s"
+    },
+    {
+      "type": "vehicle_offline",
+      "plate": "T407EBQ",
+      "vehicleName": "T407EBQ",
+      "devIdno": "14682601266",
+      "fuel": 0,
+      "time": "2026-03-18T18:40:05.020Z"
+    },
+    {
+      "type": "vehicle_online",
+      "plate": "T407EBQ",
+      "vehicleName": "T407EBQ",
+      "devIdno": "14682601266",
+      "fuel": 0,
+      "time": "2026-03-18T17:30:02.245Z",
+      "offlineSecs": 569,
+      "offlineStr": "9m 29s"
+    },
+    {
+      "type": "vehicle_offline",
+      "plate": "T407EBQ",
+      "vehicleName": "T407EBQ",
+      "devIdno": "14682601266",
+      "fuel": 0,
+      "time": "2026-03-18T17:20:47.419Z"
+    },
+    {
+      "type": "vehicle_offline",
+      "plate": "T245EHC",
+      "vehicleName": "T245EHC",
+      "devIdno": "14682601265",
+      "fuel": 0,
+      "time": "2026-03-18T15:39:42.692Z"
+    },
+    {
+      "type": "vehicle_online",
+      "plate": "T162EHC",
+      "vehicleName": "T162EHC",
+      "devIdno": "14682601267",
+      "fuel": 0,
+      "time": "2026-03-18T11:50:10.406Z",
+      "offlineSecs": 3197,
+      "offlineStr": "53m 17s"
+    },
+    {
+      "type": "vehicle_offline",
+      "plate": "T162EHC",
+      "vehicleName": "T162EHC",
+      "devIdno": "14682601267",
+      "fuel": 0,
+      "time": "2026-03-18T10:57:08.962Z"
+    },
+    {
+      "type": "vehicle_online",
+      "plate": "T245EHC",
+      "vehicleName": "T245EHC",
+      "devIdno": "14682601265",
+      "fuel": 0,
+      "time": "2026-03-18T08:05:36.000Z",
+      "offlineSecs": 64957,
+      "offlineStr": "18h 2m"
+    },
+    {
+      "type": "vehicle_offline",
+      "plate": "T245EHC",
+      "vehicleName": "T245EHC",
+      "devIdno": "14682601265",
+      "fuel": 307.6,
+      "time": "2026-03-17T14:03:13.998Z"
+    },
+    {
+      "type": "vehicle_online",
+      "plate": "T407EBQ",
+      "vehicleName": "T407EBQ",
+      "devIdno": "14682601266",
+      "fuel": 0,
+      "time": "2026-03-17T08:53:49.010Z",
+      "offlineSecs": 75,
+      "offlineStr": "1m 15s"
+    },
+    {
+      "type": "vehicle_offline",
+      "plate": "T407EBQ",
+      "vehicleName": "T407EBQ",
+      "devIdno": "14682601266",
+      "fuel": 0,
+      "time": "2026-03-17T08:52:49.008Z"
+    },
+    {
+      "type": "vehicle_online",
+      "plate": "T407EBQ",
+      "vehicleName": "T407EBQ",
+      "devIdno": "14682601266",
+      "fuel": 0,
+      "time": "2026-03-17T08:00:17.223Z",
+      "offlineSecs": 976,
+      "offlineStr": "16m 16s"
+    },
+    {
+      "type": "vehicle_offline",
+      "plate": "T407EBQ",
+      "vehicleName": "T407EBQ",
+      "devIdno": "14682601266",
+      "fuel": 0,
+      "time": "2026-03-17T07:44:16.632Z"
+    },
+    {
+      "type": "vehicle_online",
+      "plate": "T162EHC",
+      "vehicleName": "T162EHC",
+      "devIdno": "14682601267",
+      "fuel": 0,
+      "time": "2026-03-17T06:55:16.227Z",
+      "offlineSecs": 65634,
+      "offlineStr": "18h 13m"
+    },
+    {
+      "type": "vehicle_online",
+      "plate": "T407EBQ",
+      "vehicleName": "T407EBQ",
+      "devIdno": "14682601266",
+      "fuel": 0,
+      "time": "2026-03-17T06:39:22.696Z",
+      "offlineSecs": 56185,
+      "offlineStr": "15h 36m"
+    },
+    {
+      "type": "vehicle_offline",
+      "plate": "T407EBQ",
+      "vehicleName": "T407EBQ",
+      "devIdno": "14682601266",
+      "fuel": 0,
+      "time": "2026-03-16T15:02:58.296Z"
+    },
+    {
+      "type": "vehicle_online",
+      "plate": "T407EBQ",
+      "vehicleName": "T407EBQ",
+      "devIdno": "14682601266",
+      "fuel": 0,
+      "time": "2026-03-16T13:41:09.680Z",
+      "offlineSecs": 255,
+      "offlineStr": "4m 15s"
+    },
+    {
+      "type": "vehicle_offline",
+      "plate": "T407EBQ",
+      "vehicleName": "T407EBQ",
+      "devIdno": "14682601266",
+      "fuel": 0,
+      "time": "2026-03-16T13:37:10.548Z"
+    },
+    {
+      "type": "vehicle_online",
+      "plate": "T245EHC",
+      "vehicleName": "T245EHC",
+      "devIdno": "14682601265",
+      "fuel": 2129.4,
+      "time": "2026-03-16T13:22:39.106Z",
+      "offlineSecs": 30,
+      "offlineStr": "30s"
+    },
+    {
+      "type": "vehicle_offline",
+      "plate": "T245EHC",
+      "vehicleName": "T245EHC",
+      "devIdno": "14682601265",
+      "fuel": 2129.4,
+      "time": "2026-03-16T13:22:24.015Z"
+    },
+    {
+      "type": "vehicle_online",
+      "plate": "T245EHC",
+      "vehicleName": "T245EHC",
+      "devIdno": "14682601265",
+      "fuel": 2129.4,
+      "time": "2026-03-16T12:59:08.236Z",
+      "offlineSecs": 45,
+      "offlineStr": "45s"
+    },
+    {
+      "type": "vehicle_offline",
+      "plate": "T245EHC",
+      "vehicleName": "T245EHC",
+      "devIdno": "14682601265",
+      "fuel": 2129.4,
+      "time": "2026-03-16T12:58:38.215Z"
+    },
+    {
+      "type": "vehicle_offline",
+      "plate": "T162EHC",
+      "vehicleName": "T162EHC",
+      "devIdno": "14682601267",
+      "fuel": 0,
+      "time": "2026-03-16T12:41:38.639Z"
+    },
+    {
+      "type": "vehicle_online",
+      "plate": "T162EHC",
+      "vehicleName": "T162EHC",
+      "devIdno": "14682601267",
+      "fuel": 0,
+      "time": "2026-03-16T12:37:37.523Z",
+      "offlineSecs": 17321,
+      "offlineStr": "4h 48m"
+    },
+    {
+      "type": "vehicle_online",
+      "plate": "T407EBQ",
+      "vehicleName": "T407EBQ",
+      "devIdno": "14682601266",
+      "fuel": 0,
+      "time": "2026-03-16T10:59:32.440Z",
+      "offlineSecs": 1231,
+      "offlineStr": "20m 31s"
+    },
+    {
+      "type": "vehicle_offline",
+      "plate": "T407EBQ",
+      "vehicleName": "T407EBQ",
+      "devIdno": "14682601266",
+      "fuel": 0,
+      "time": "2026-03-16T10:39:16.812Z"
+    },
+    {
+      "type": "vehicle_online",
+      "plate": "T407EBQ",
+      "vehicleName": "T407EBQ",
+      "devIdno": "14682601266",
+      "fuel": 0,
+      "time": "2026-03-16T10:35:16.644Z",
+      "offlineSecs": 6303,
+      "offlineStr": "1h 45m"
+    },
+    {
+      "type": "vehicle_offline",
+      "plate": "T407EBQ",
+      "vehicleName": "T407EBQ",
+      "devIdno": "14682601266",
+      "fuel": 0,
+      "time": "2026-03-16T08:53:13.167Z"
+    },
+    {
+      "type": "vehicle_offline",
+      "plate": "T162EHC",
+      "vehicleName": "T162EHC",
+      "devIdno": "14682601267",
+      "fuel": 0,
+      "time": "2026-03-16T07:49:11.265Z"
+    },
+    {
+      "type": "vehicle_online",
+      "plate": "T162EHC",
+      "vehicleName": "T162EHC",
+      "devIdno": "14682601267",
+      "fuel": 0,
+      "time": "2026-03-16T07:45:26.147Z",
+      "offlineSecs": 435,
+      "offlineStr": "7m 15s"
+    },
+    {
+      "type": "vehicle_offline",
+      "plate": "T162EHC",
+      "vehicleName": "T162EHC",
+      "devIdno": "14682601267",
+      "fuel": 0,
+      "time": "2026-03-16T07:38:25.860Z"
+    },
+    {
+      "type": "vehicle_online",
+      "plate": "T245EHC",
+      "vehicleName": "T245EHC",
+      "devIdno": "14682601265",
+      "fuel": 2129.4,
+      "time": "2026-03-16T07:38:11.030Z",
+      "offlineSecs": 90961,
+      "offlineStr": "25h 16m"
+    },
+    {
+      "type": "vehicle_online",
+      "plate": "T407EBQ",
+      "vehicleName": "T407EBQ",
+      "devIdno": "14682601266",
+      "fuel": 0,
+      "time": "2026-03-15T15:19:09.593Z",
+      "offlineSecs": 197870,
+      "offlineStr": "54h 57m"
+    },
+    {
+      "type": "vehicle_offline",
+      "plate": "T245EHC",
+      "vehicleName": "T245EHC",
+      "devIdno": "14682601265",
+      "fuel": 287.9,
+      "time": "2026-03-15T06:22:24.696Z"
+    },
+    {
+      "type": "vehicle_offline",
+      "plate": "T770EMX",
+      "vehicleName": "T770EMX",
+      "devIdno": "14682601177",
+      "fuel": 216.5,
+      "time": "2026-03-15T06:16:54.375Z"
+    },
+    {
+      "type": "vehicle_online",
+      "plate": "T770EMX",
+      "vehicleName": "T770EMX",
+      "devIdno": "14682601177",
+      "fuel": 219.3,
+      "time": "2026-03-14T19:19:25.632Z",
+      "offlineSecs": 105,
+      "offlineStr": "1m 45s"
+    },
+    {
+      "type": "vehicle_offline",
+      "plate": "T770EMX",
+      "vehicleName": "T770EMX",
+      "devIdno": "14682601177",
+      "fuel": 218.9,
+      "time": "2026-03-14T19:17:55.576Z"
+    },
+    {
+      "type": "vehicle_online",
+      "plate": "T770EMX",
+      "vehicleName": "T770EMX",
+      "devIdno": "14682601177",
+      "fuel": 226.7,
+      "time": "2026-03-14T17:32:39.154Z",
+      "offlineSecs": 420,
+      "offlineStr": "7m 0s"
+    },
+    {
+      "type": "vehicle_offline",
+      "plate": "T770EMX",
+      "vehicleName": "T770EMX",
+      "devIdno": "14682601177",
+      "fuel": 226.8,
+      "time": "2026-03-14T17:25:54.008Z"
+    },
+    {
+      "type": "vehicle_online",
+      "plate": "T972EHX",
+      "vehicleName": "T972EHX",
+      "devIdno": "14682601264",
+      "fuel": 516.9,
+      "time": "2026-03-14T15:53:36.136Z",
+      "offlineSecs": 31210,
+      "offlineStr": "8h 40m"
+    },
+    {
+      "type": "vehicle_online",
+      "plate": "T770EMX",
+      "vehicleName": "T770EMX",
+      "devIdno": "14682601177",
+      "fuel": 481.4,
+      "time": "2026-03-14T15:53:36.136Z",
+      "offlineSecs": 113536,
+      "offlineStr": "31h 32m"
+    },
+    {
+      "type": "vehicle_offline",
+      "plate": "T972EHX",
+      "vehicleName": "T972EHX",
+      "devIdno": "14682601264",
+      "fuel": 2299.5,
+      "time": "2026-03-14T07:13:40.924Z"
+    },
+    {
+      "type": "vehicle_online",
+      "plate": "T972EHX",
+      "vehicleName": "T972EHX",
+      "devIdno": "14682601264",
+      "fuel": 228.6,
+      "time": "2026-03-13T18:44:50.310Z",
+      "offlineSecs": 5808,
+      "offlineStr": "1h 36m"
+    },
+    {
+      "type": "vehicle_offline",
+      "plate": "T972EHX",
+      "vehicleName": "T972EHX",
+      "devIdno": "14682601264",
+      "fuel": 235.6,
+      "time": "2026-03-13T17:08:17.477Z"
+    },
+    {
+      "type": "vehicle_online",
+      "plate": "T972EHX",
+      "vehicleName": "T972EHX",
+      "devIdno": "14682601264",
+      "fuel": 913.7,
+      "time": "2026-03-13T09:47:22.120Z",
+      "offlineSecs": 90,
+      "offlineStr": "1m 30s"
+    },
+    {
+      "type": "vehicle_offline",
+      "plate": "T972EHX",
+      "vehicleName": "T972EHX",
+      "devIdno": "14682601264",
+      "fuel": 1034.7,
+      "time": "2026-03-13T09:46:07.054Z"
+    },
+    {
+      "type": "vehicle_online",
+      "plate": "T972EHX",
+      "vehicleName": "T972EHX",
+      "devIdno": "14682601264",
+      "fuel": 847.7,
+      "time": "2026-03-13T09:42:07.085Z",
+      "offlineSecs": 134,
+      "offlineStr": "2m 14s"
+    },
+    {
+      "type": "vehicle_offline",
+      "plate": "T972EHX",
+      "vehicleName": "T972EHX",
+      "devIdno": "14682601264",
+      "fuel": 805.7,
+      "time": "2026-03-13T09:40:06.917Z"
+    }
+  ],
+  "lastNonZeroFuel": {
+    "14682601177": 216.47,
+    "14682601263": 2074.72,
+    "14682601264": 1159.48,
+    "14682601265": 1187.56
+  }
+}

@@ -3269,21 +3269,80 @@ function buildPopupHtml(v, geoName) {
   </div>`;
 }
 
+// ── Helpers ─────────────────────────────────────────────────────────────────
+function fmtDur(ms) {
+  if (!ms || ms <= 0) return '< 1s';
+  const s = Math.floor(ms / 1000);
+  const m = Math.floor(s / 60);
+  const h = Math.floor(m / 60);
+  const d = Math.floor(h / 24);
+  if (d > 0) return `${d}d ${h % 24}h ${m % 60}m`;
+  if (h > 0) return `${h}h ${m % 60}m`;
+  if (m > 0) return `${m}m ${s % 60}s`;
+  return `${s}s`;
+}
+
+// ── Single camera cell (HLS) inside the 6-cam grid ─────────────────────────
+function CameraCell({ devIdno, channel, jsession }) {
+  const videoRef = useRef(null);
+  const hlsRef   = useRef(null);
+  const [status, setStatus] = useState('loading'); // 'loading' | 'live' | 'error'
+  const Hls = useHlsJs();
+  const hlsUrl = `/api/video/hls?devIdno=${devIdno}&channel=${channel}&stream=1&jsession=${jsession}`;
+
+  useEffect(() => {
+    if (!Hls || !videoRef.current) return;
+    if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
+    setStatus('loading');
+    if (Hls.isSupported()) {
+      const hls = new Hls({ lowLatencyMode: true, enableWorker: true, maxBufferLength: 10, maxLoadingDelay: 4 });
+      hls.loadSource(hlsUrl);
+      hls.attachMedia(videoRef.current);
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        setStatus('live');
+        videoRef.current?.play().catch(() => {});
+      });
+      hls.on(Hls.Events.ERROR, (_, d) => { if (d.fatal) setStatus('error'); });
+      hlsRef.current = hls;
+    } else if (videoRef.current?.canPlayType('application/vnd.apple.mpegurl')) {
+      videoRef.current.src = hlsUrl;
+      videoRef.current.play().catch(() => {});
+      setStatus('live');
+    } else {
+      setStatus('error');
+    }
+    return () => { if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; } };
+  }, [Hls, hlsUrl]);
+
+  return (
+    <div style={{ position: 'relative', background: '#0d0d0d', aspectRatio: '4/3', overflow: 'hidden' }}>
+      <video ref={videoRef} muted playsInline style={{ width: '100%', height: '100%', objectFit: 'cover', display: status === 'live' ? 'block' : 'none' }} />
+      {status !== 'live' && (
+        <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          {status === 'loading' && <div style={{ color: '#4b5563', fontSize: 10, textAlign: 'center' }}>⏳<br />CH {channel}</div>}
+          {status === 'error'   && <div style={{ color: '#6b7280', fontSize: 10, textAlign: 'center' }}>📵<br />CH {channel}</div>}
+        </div>
+      )}
+      <div style={{ position: 'absolute', bottom: 2, left: 3, background: 'rgba(0,0,0,0.65)', color: '#9ca3af', fontSize: 9, fontWeight: 700, padding: '1px 5px', borderRadius: 3 }}>CAM {channel}</div>
+    </div>
+  );
+}
+
 // ── Camera overlay ─────────────────────────────────────────────────────────
-// channel=6 on CMSV6's player shows all 6 cameras in its own native grid.
-// Individual channel buttons (1–5) switch to that single-camera view.
+// 6 individual HLS streams in a 3×2 grid — works over HTTPS via /api/video/hls proxy.
 
 // Panel dimensions — sized so 4 panels fit on a large monitor in a 2×2 grid
-const PANEL_W = 450;
-const PANEL_VIDEO_H = 300;
+const PANEL_W      = 450;
+const PANEL_HEAD_H = 44;   // title bar height
+const PANEL_CAM_H  = 230;  // ~2 rows of 4:3 cells + gaps
 
 function defaultPanelPos(index) {
-  // 2×2 grid anchored to bottom-left of viewport (clear of the right sidebar)
+  // 2×2 grid anchored to bottom-left of viewport
   const col = index % 2;
   const row = Math.floor(index / 2);
   return {
     x: 20 + col * (PANEL_W + 10),
-    y: window.innerHeight - (PANEL_VIDEO_H + 44) - 10 - row * (PANEL_VIDEO_H + 44 + 10),
+    y: window.innerHeight - (PANEL_CAM_H + PANEL_HEAD_H) - 10 - row * (PANEL_CAM_H + PANEL_HEAD_H + 10),
   };
 }
 
@@ -3338,10 +3397,8 @@ function MapCameraOverlay({ panels, onClosePanel }) {
       )}
 
       {panels.map((panel, index) => {
-        // Proxy URL — channel=6 shows CMSV6 native all-camera grid
-        const proxyUrl = `/api/video/player?devIdno=${panel.devIdno}&channel=6&stream=0&jsession=${panel.jsession}`;
-        const pos      = positions[panel.devIdno] ?? defaultPanelPos(index);
-        const isRepos  = repositioning === panel.devIdno;
+        const pos     = positions[panel.devIdno] ?? defaultPanelPos(index);
+        const isRepos = repositioning === panel.devIdno;
 
         return (
           <div key={panel.devIdno} style={{
@@ -3351,7 +3408,7 @@ function MapCameraOverlay({ panels, onClosePanel }) {
             boxShadow: isRepos ? '0 0 0 3px #6366f1, 0 8px 32px rgba(0,0,0,0.6)' : '0 8px 32px rgba(0,0,0,0.6)',
             borderRadius: 12, overflow: 'hidden', userSelect: 'none',
           }}>
-            {/* Title bar — drag with mouse, double-tap/click to reposition */}
+            {/* Title bar — drag with mouse, double-tap to reposition */}
             <div
               onMouseDown={e => startDrag(e, panel.devIdno, index)}
               onDoubleClick={() => setRepositioning(panel.devIdno)}
@@ -3360,13 +3417,16 @@ function MapCameraOverlay({ panels, onClosePanel }) {
               <span style={{ color: '#6b7280', fontSize: 12, pointerEvents: 'none' }}>⠿</span>
               <div style={{ width: 7, height: 7, borderRadius: '50%', background: '#22c55e', boxShadow: '0 0 5px #22c55e', flexShrink: 0 }} />
               <span style={{ color: '#fff', fontWeight: 800, fontSize: 13, flex: 1, pointerEvents: 'none' }}>{panel.plate}</span>
-              {/* Live clock */}
               <span style={{ color: '#6b7280', fontSize: 11, fontFamily: 'monospace', pointerEvents: 'none' }}>
                 {clock.toLocaleTimeString()}
               </span>
-              {/* Open in new window (optional) */}
-              <button onClick={() => window.open(panel.playerUrl, '_blank', 'width=1000,height=650,menubar=no,toolbar=no,location=no')}
-                title="Open in new window"
+              <button
+                onClick={() => window.open(
+                  // channel=6 = CMSV6 native all-camera grid; use direct HTTP URL in new tab
+                  panel.playerUrl.replace(/channel=\d+/, 'channel=6'),
+                  '_blank', 'width=1100,height=720,menubar=no,toolbar=no,location=no'
+                )}
+                title="Open all cameras in new window"
                 style={{ background: 'transparent', border: '1px solid #374151', borderRadius: 5, color: '#9ca3af', cursor: 'pointer', fontSize: 11, padding: '2px 7px', fontFamily: 'inherit' }}>
                 ↗
               </button>
@@ -3375,12 +3435,13 @@ function MapCameraOverlay({ panels, onClosePanel }) {
                 ✕
               </button>
             </div>
-            {/* CMSV6 channel=6 player via same-origin proxy — no mixed-content block */}
+            {/* channel=6 = CMSV6 native all-cameras grid, proxied to avoid mixed-content.
+                WebSocket video frames tunnel through /api/video/stream via server.on('upgrade') */}
             <iframe
-              key={proxyUrl}
-              src={proxyUrl}
-              style={{ width: '100%', height: PANEL_VIDEO_H, border: 'none', display: 'block' }}
-              allowFullScreen
+              key={`${panel.devIdno}-${panel.jsession}`}
+              src={`/api/video/player?devIdno=${panel.devIdno}&channel=6&stream=1&jsession=${panel.jsession}&api_key=${API_KEY}`}
+              style={{ width: '100%', height: PANEL_CAM_H, border: 'none', display: 'block', background: '#000' }}
+              allow="autoplay"
               title={panel.plate}
             />
           </div>
@@ -3456,6 +3517,147 @@ function MapHlsPlayer({ hlsUrl, playerUrl, Hls }) {
   );
 }
 
+// ── Vehicle detail popup panel (React — auto-updates, floats over map) ─────
+function VehicleDetailPanel({ devIdno, vehicles, geoNames, stateHistory, onClose }) {
+  const { t } = useTheme();
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const iv = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(iv);
+  }, []);
+
+  const v = vehicles.find(v => v.devIdno === devIdno);
+  if (!v) return null;
+
+  const hist        = stateHistory[devIdno] || {};
+  const geo         = geoNames[devIdno];
+  const statusColor = !v.online ? '#ef4444' : v.accOn ? '#22c55e' : '#f97316';
+  const statusLabel = !v.online ? 'Offline' : v.accOn ? 'ACC ON · Running' : 'ACC OFF · Parked';
+  const alarmActive = v.online === 2 || v.alarm > 0;
+
+  // Parse last GPS time
+  let lastGpsDate = null;
+  if (v.gpsTime) {
+    const p = new Date(typeof v.gpsTime === 'string' ? v.gpsTime.replace(' ', 'T') : v.gpsTime);
+    if (!isNaN(p)) lastGpsDate = p;
+  }
+
+  const accOnDur  = v.online && v.accOn  && hist.accOnSince  ? fmtDur(now - hist.accOnSince)  : null;
+  const accOffDur = v.online && !v.accOn && hist.accOffSince ? fmtDur(now - hist.accOffSince) : null;
+  const offlineDur = !v.online
+    ? (hist.offlineSince ? fmtDur(now - hist.offlineSince) : lastGpsDate ? fmtDur(now - lastGpsDate) : null)
+    : null;
+
+  // Fuel anomaly: drop while ACC is off
+  const fuelDrop = (!v.accOn && v.online && hist.fuelAtAccOff != null && v.fuel != null)
+    ? hist.fuelAtAccOff - v.fuel : null;
+
+  const Row = ({ icon, label, value, valueColor }) => (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '5px 0', borderBottom: `1px solid ${t.border}` }}>
+      <span style={{ color: t.textSoft, fontSize: 12 }}>{icon} {label}</span>
+      <span style={{ color: valueColor || t.text, fontSize: 12, fontWeight: 600 }}>{value ?? '—'}</span>
+    </div>
+  );
+
+  return (
+    <div style={{
+      position: 'fixed', top: 76, right: 16, zIndex: 1200,
+      width: 270, background: t.panel,
+      border: `1.5px solid ${statusColor}55`,
+      borderRadius: 14, overflow: 'hidden',
+      boxShadow: '0 8px 32px rgba(0,0,0,0.22)',
+      fontFamily: "'DM Sans', system-ui, sans-serif",
+    }}>
+      {/* Header */}
+      <div style={{ background: `${statusColor}18`, padding: '10px 12px 9px', display: 'flex', alignItems: 'center', gap: 8, borderBottom: `1px solid ${statusColor}33` }}>
+        <div style={{ width: 10, height: 10, borderRadius: '50%', background: statusColor, boxShadow: `0 0 7px ${statusColor}`, flexShrink: 0 }} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontWeight: 800, fontSize: 15, color: t.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{v.plate || v.devIdno}</div>
+          <div style={{ color: statusColor, fontSize: 11, fontWeight: 600, marginTop: 1 }}>{statusLabel}</div>
+        </div>
+        <button onClick={onClose} style={{ background: '#ef444422', border: '1px solid #ef444455', borderRadius: 6, color: '#ef4444', cursor: 'pointer', fontSize: 12, padding: '3px 8px', fontFamily: 'inherit', flexShrink: 0 }}>✕</button>
+      </div>
+
+      <div style={{ padding: '8px 12px 10px' }}>
+        {/* Location */}
+        {geo && <div style={{ color: t.textSoft, fontSize: 11, marginBottom: 7, display: 'flex', gap: 5, alignItems: 'flex-start' }}>
+          <span style={{ flexShrink: 0 }}>📍</span><span style={{ lineHeight: 1.4 }}>{geo}</span>
+        </div>}
+
+        {/* ── OFFLINE ── */}
+        {!v.online && (
+          <>
+            <div style={{ background: '#ef444413', border: '1px solid #ef444430', borderRadius: 8, padding: '8px 10px', marginBottom: 8 }}>
+              <div style={{ color: '#ef4444', fontSize: 12, fontWeight: 700, marginBottom: 3 }}>⚠️ Vehicle Offline</div>
+              {offlineDur && <div style={{ color: t.textSoft, fontSize: 12 }}>Offline for: <b style={{ color: t.text }}>{offlineDur}</b></div>}
+              {lastGpsDate && <div style={{ color: t.textSoft, fontSize: 12, marginTop: 2 }}>Last seen: <b style={{ color: t.text }}>{lastGpsDate.toLocaleString()}</b></div>}
+            </div>
+            {hist.lastKnown && (
+              <>
+                <div style={{ color: t.muted, fontSize: 10, fontWeight: 700, letterSpacing: 1, marginBottom: 4, textTransform: 'uppercase' }}>Last known data</div>
+                <Row icon="🏎️" label="Speed"      value={hist.lastKnown.speed != null ? `${hist.lastKnown.speed} km/h` : null} />
+                <Row icon="⛽"  label="Fuel"       value={hist.lastKnown.fuel  != null ? `${hist.lastKnown.fuel.toFixed(1)} L`  : null} />
+              </>
+            )}
+          </>
+        )}
+
+        {/* ── ONLINE ── */}
+        {!!v.online && (
+          <>
+            {alarmActive && (
+              <div style={{ background: '#ef444413', border: '1px solid #ef444430', borderRadius: 8, padding: '7px 10px', marginBottom: 8 }}>
+                <div style={{ color: '#ef4444', fontSize: 12, fontWeight: 700 }}>⚡ Active Alarm Detected</div>
+              </div>
+            )}
+
+            <Row icon="🏎️" label="Speed"   value={v.speed != null ? `${v.speed} km/h` : null}
+              valueColor={v.speed > 80 ? '#ef4444' : undefined} />
+            <Row icon="⛽" label="Fuel"    value={v.fuel  != null ? `${v.fuel.toFixed(1)} L${v.fuelEstimated ? ' (est.)' : ''}` : null} />
+            {v.todayKm != null && <Row icon="🛣️" label="Today km" value={`${v.todayKm.toFixed(1)} km`} />}
+            {v.satellites != null && <Row icon="🛰️" label="Satellites" value={v.satellites} />}
+
+            {/* ACC ON block */}
+            {v.accOn && (
+              <div style={{ background: '#22c55e13', border: '1px solid #22c55e30', borderRadius: 8, padding: '8px 10px', marginTop: 7 }}>
+                <div style={{ color: '#22c55e', fontSize: 12, fontWeight: 700 }}>🔑 Engine Running</div>
+                {accOnDur && <div style={{ color: t.textSoft, fontSize: 12, marginTop: 2 }}>Running for: <b style={{ color: t.text }}>{accOnDur}</b></div>}
+              </div>
+            )}
+
+            {/* ACC OFF block */}
+            {!v.accOn && (
+              <div style={{ background: '#f9731613', border: '1px solid #f9731630', borderRadius: 8, padding: '8px 10px', marginTop: 7 }}>
+                <div style={{ color: '#f97316', fontSize: 12, fontWeight: 700 }}>🔑 Engine Stopped</div>
+                {accOffDur && <div style={{ color: t.textSoft, fontSize: 12, marginTop: 2 }}>Stopped for: <b style={{ color: t.text }}>{accOffDur}</b></div>}
+                {hist.fuelAtAccOff != null && (
+                  <div style={{ color: t.textSoft, fontSize: 12, marginTop: 2 }}>
+                    Fuel at stop: <b style={{ color: t.text }}>{hist.fuelAtAccOff.toFixed(1)} L</b>
+                  </div>
+                )}
+                {fuelDrop != null && fuelDrop > 0.5 && (
+                  <div style={{ color: '#ef4444', fontSize: 12, fontWeight: 700, marginTop: 5, background: '#ef444415', borderRadius: 6, padding: '4px 7px' }}>
+                    ⚠️ Fuel drop while parked: <b>{fuelDrop.toFixed(1)} L</b>
+                  </div>
+                )}
+                {fuelDrop != null && fuelDrop <= 0.5 && (
+                  <div style={{ color: '#22c55e', fontSize: 12, marginTop: 3 }}>✓ No fuel anomaly</div>
+                )}
+              </div>
+            )}
+          </>
+        )}
+
+        {/* Footer */}
+        <div style={{ color: t.muted, fontSize: 10, marginTop: 9, display: 'flex', justifyContent: 'space-between' }}>
+          <span>{v.lat?.toFixed(5)}, {v.lng?.toFixed(5)}</span>
+          <span>🔄 15s</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Live Map view ──────────────────────────────────────────────────────────
 
 function LiveMapView() {
@@ -3484,21 +3686,58 @@ function LiveMapView() {
     return () => clearInterval(iv);
   }, [fetchLive]);
 
-  const mapRef          = useRef(null);
-  const mapInstanceRef  = useRef(null);
-  const clusterRef      = useRef(null);
-  const markersRef      = useRef({});
-  const timerRefs       = useRef([]);
-  const fittedRef       = useRef(false);
-  const vehiclesRef     = useRef([]);
-  const openStreamRef   = useRef(null);
+  const mapRef                = useRef(null);
+  const mapInstanceRef        = useRef(null);
+  const clusterRef            = useRef(null);
+  const markersRef            = useRef({});
+  const timerRefs             = useRef([]);
+  const fittedRef             = useRef(false);
+  const vehiclesRef           = useRef([]);
+  const openStreamRef         = useRef(null);
+  const vehicleStateHistoryRef = useRef({});   // tracks ACC/online transitions for detail panel
+  const setActivePopupIdRef   = useRef(null);  // lets Leaflet event set React state
   const [geoNames,      setGeoNames]      = useState({});
   const [streamPanels,  setStreamPanels]  = useState([]);
   const [rightOpen,     setRightOpen]     = useState(true);
   const [fullscreen,    setFullscreen]    = useState(false);
+  const [activePopupId, setActivePopupId] = useState(null);
+
+  // Keep setActivePopupId accessible from Leaflet event handlers
+  setActivePopupIdRef.current = setActivePopupId;
 
   // Keep vehiclesRef in sync for stream callback
   useEffect(() => { vehiclesRef.current = vehicles; }, [vehicles]);
+
+  // Track vehicle state transitions for the detail panel (ACC on/off, online/offline)
+  useEffect(() => {
+    for (const v of vehicles) {
+      const hist = vehicleStateHistoryRef.current[v.devIdno] || {};
+      const prev = hist._prev;
+      if (prev) {
+        if (prev.accOn !== v.accOn) {
+          if (!v.accOn) {
+            hist.accOffSince  = new Date();
+            hist.fuelAtAccOff = v.fuel;
+            hist.accOnSince   = null;
+          } else {
+            hist.accOnSince  = new Date();
+            hist.accOffSince = null;
+          }
+        }
+        if (prev.online !== 0 && v.online === 0) {
+          hist.offlineSince = new Date();
+          hist.lastKnown    = { speed: prev.speed, fuel: prev.fuel };
+        } else if (prev.online === 0 && v.online !== 0) {
+          hist.offlineSince = null;
+        }
+      } else {
+        // First observation — seed fuel-at-stop if already ACC OFF
+        if (!v.accOn && v.online) hist.fuelAtAccOff = v.fuel;
+      }
+      hist._prev = { accOn: v.accOn, online: v.online, fuel: v.fuel, speed: v.speed };
+      vehicleStateHistoryRef.current[v.devIdno] = hist;
+    }
+  }, [vehicles]);
 
   // Stream opener — stored in ref so Leaflet popup events always see latest
   useEffect(() => {
@@ -3547,11 +3786,19 @@ function LiveMapView() {
     clusterRef.current = cluster;
     mapInstanceRef.current = map;
 
-    // Wire up stream button clicks via event delegation on popup open
+    // Wire up stream button + detail panel on popup open
     map.on('popupopen', (e) => {
       const btn = e.popup.getElement()?.querySelector('[data-stream-id]');
       if (btn) btn.onclick = () => openStreamRef.current?.(btn.dataset.streamId);
+      // Find which marker owns this popup and open the detail panel
+      for (const [id, m] of Object.entries(markersRef.current)) {
+        if (m.getPopup() === e.popup) {
+          setActivePopupIdRef.current?.(id);
+          break;
+        }
+      }
     });
+    map.on('popupclose', () => setActivePopupIdRef.current?.(null));
 
     // Invalidate size on window resize (also fires after sidebar transition)
     const onResize = () => map.invalidateSize();
@@ -3741,6 +3988,20 @@ function LiveMapView() {
         panels={streamPanels}
         onClosePanel={(id) => setStreamPanels(prev => prev.filter(p => p.devIdno !== id))}
       />
+
+      {/* Vehicle detail panel — auto-updates, floats top-right */}
+      {activePopupId && (
+        <VehicleDetailPanel
+          devIdno={activePopupId}
+          vehicles={vehicles}
+          geoNames={geoNames}
+          stateHistory={vehicleStateHistoryRef.current}
+          onClose={() => {
+            setActivePopupId(null);
+            mapInstanceRef.current?.closePopup();
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -4493,21 +4754,21 @@ function FleetDashboardContent() {
         overflow: "hidden",
       }}>
         {/* Logo */}
-        <div style={{ padding: sidebarOpen ? "28px 20px 20px" : "14px 0", display: "flex", justifyContent: "center" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: sidebarOpen ? 12 : 0 }}>
-            <div style={{ borderRadius: 14, width: 44, height: 44, overflow: "hidden", flexShrink: 0, boxShadow: `0 6px 20px ${t.accentGlow}` }}>
+        <div style={{ padding: sidebarOpen ? "20px 20px 16px" : "14px 0", display: "flex", justifyContent: "center" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: sidebarOpen ? 14 : 0 }}>
+            <div style={{ borderRadius: 16, width: 64, height: 64, overflow: "hidden", flexShrink: 0, boxShadow: `0 6px 20px ${t.accentGlow}` }}>
               <img src="/logo.png" alt="Helion" style={{ width: "100%", height: "100%", objectFit: "contain", mixBlendMode: theme === "dark" ? "screen" : "normal" }} />
             </div>
             {sidebarOpen && <div>
-              <div style={{ fontWeight: 800, fontSize: 16, color: t.text, letterSpacing: -0.3 }}>HELION</div>
-              <div style={{ color: t.textSoft, fontSize: 12, fontWeight: 400 }}>Fleet Management</div>
+              <div style={{ fontWeight: 800, fontSize: 22, color: t.text, letterSpacing: -0.5, lineHeight: 1.1 }}>HELION</div>
+              <div style={{ color: t.textSoft, fontSize: 13, fontWeight: 400, marginTop: 3 }}>Fleet Management</div>
             </div>}
           </div>
         </div>
 
         {/* ERP Company Switcher */}
         {sidebarOpen && <div style={{ margin: "0 10px 10px" }}>
-          <div style={{ color: t.muted, fontSize: 10, fontWeight: 700, letterSpacing: 1.4, padding: "0 4px 7px", textTransform: "uppercase" }}>HELION</div>
+          {/* No section label — logo above serves as brand header */}
           <div style={{ display: "flex", flexDirection: "column", gap: 3, maxHeight: 180, overflowY: "auto" }}>
             {/* All Companies */}
             <button onClick={() => setActiveCompanyId(null)} style={{
