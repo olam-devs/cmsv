@@ -3411,10 +3411,13 @@ function LiveMapView() {
   useEffect(() => {
     if (!mapRef.current) return;
     const map = L.map(mapRef.current, { center: [-6.8, 39.28], zoom: 12 });
-    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    L.tileLayer(`${API_BASE}/tiles/{z}/{x}/{y}`, {
       attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
       maxZoom: 19,
     }).addTo(map);
+
+    // Force Leaflet to measure the container after React finishes layout
+    setTimeout(() => map.invalidateSize(), 100);
 
     // Marker cluster group
     const cluster = L.markerClusterGroup({
@@ -3523,7 +3526,7 @@ function LiveMapView() {
   return (
     <div style={fullscreen
       ? { position: 'fixed', inset: 0, zIndex: 800, display: 'flex', gap: 0, background: '#000' }
-      : { display: 'flex', gap: 0, height: 'calc(100vh - 180px)', minHeight: 500, position: 'relative' }}>
+      : { display: 'flex', gap: 0, width: '100%', height: 'calc(100vh - 180px)', minHeight: 500, position: 'relative' }}>
       {/* Map */}
       <div style={{ flex: 1, borderRadius: fullscreen ? 0 : (rightOpen ? '16px 0 0 16px' : 16), overflow: 'hidden', border: fullscreen ? 'none' : `1px solid ${t.border}`, boxShadow: fullscreen ? 'none' : '0 2px 12px rgba(0,0,0,0.08)', position: 'relative', transition: 'border-radius 0.2s' }}>
         <div ref={mapRef} style={{ width: '100%', height: '100%' }} />
@@ -3702,7 +3705,7 @@ function RoutesView({ vehicles }) {
     if (mapInstanceRef.current) { mapInstanceRef.current.remove(); mapInstanceRef.current = null; }
 
     const map = L.map(mapRef.current, { center: [-6.8, 39.28], zoom: 12 });
-    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    L.tileLayer(`${API_BASE}/tiles/{z}/{x}/{y}`, {
       attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
       maxZoom: 19,
     }).addTo(map);

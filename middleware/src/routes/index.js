@@ -1304,4 +1304,26 @@ router.get('/routemgr/leaderboard', (req, res) => {
   ok(res, tripSvc.getLeaderboard());
 });
 
+// ══════════════════════════════════════════════════════════════════════════
+//  MAP TILE PROXY  (avoids CSP / mixed-content issues on production)
+// ══════════════════════════════════════════════════════════════════════════
+
+/** GET /api/tiles/:z/:x/:y — Proxy OpenStreetMap tiles from the same origin */
+router.get('/tiles/:z/:x/:y', async (req, res) => {
+  try {
+    const { z, x, y } = req.params;
+    const url = `https://tile.openstreetmap.org/${z}/${x}/${y}.png`;
+    const response = await fetch(url, {
+      headers: { 'User-Agent': 'StarLink-Fleet/1.0 (fleet.olamtec.co.tz)' },
+    });
+    if (!response.ok) return res.status(response.status).end();
+    res.set('Content-Type', 'image/png');
+    res.set('Cache-Control', 'public, max-age=86400');
+    const buf = await response.arrayBuffer();
+    res.send(Buffer.from(buf));
+  } catch (e) {
+    res.status(502).end();
+  }
+});
+
 module.exports = router;
