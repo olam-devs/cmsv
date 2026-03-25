@@ -18,18 +18,25 @@ const API_KEY  = "hshfd24d7998476hfbvvhfbh";
 
 async function apiFetch(path, opts = {}) {
   const { method = "GET", body, headers: extraHeaders } = opts;
-  const res = await fetch(`${API_BASE}${path}`, {
-    method,
-    headers: {
-      "x-api-key": API_KEY,
-      ...(body ? { "Content-Type": "application/json" } : {}),
-      ...extraHeaders,
-    },
-    ...(body ? { body } : {}),
-  });
-  const json = await res.json();
-  if (!json.success) throw new Error(json.message || `API error on ${path}`);
-  return json.data;
+  const controller = new AbortController();
+  const tid = setTimeout(() => controller.abort(), 20000);
+  try {
+    const res = await fetch(`${API_BASE}${path}`, {
+      method,
+      signal: controller.signal,
+      headers: {
+        "x-api-key": API_KEY,
+        ...(body ? { "Content-Type": "application/json" } : {}),
+        ...extraHeaders,
+      },
+      ...(body ? { body } : {}),
+    });
+    const json = await res.json();
+    if (!json.success) throw new Error(json.message || `API error on ${path}`);
+    return json.data;
+  } finally {
+    clearTimeout(tid);
+  }
 }
 
 // ── Theme ─────────────────────────────────────────────────────────────────────
@@ -3333,9 +3340,23 @@ function MapCameraOverlay({ panels, onClosePanel }) {
                 ✕
               </button>
             </div>
-            {/* Video */}
+            {/* Video — on HTTPS the CMSV6 HTTP iframe is mixed-content-blocked; open externally */}
             <div style={{ background: '#000' }}>
-              <iframe key={url} src={url} style={{ width: '100%', height: 394, border: 'none', display: 'block' }} allowFullScreen title={`${panel.plate} CH${ch}`} />
+              {window.location.protocol === 'https:' ? (
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: 394, gap: 14 }}>
+                  <div style={{ fontSize: 36 }}>📷</div>
+                  <div style={{ fontSize: 13, color: '#9ca3af', textAlign: 'center', lineHeight: 1.6 }}>
+                    Video player requires a direct connection<br />to the camera server (HTTP).
+                  </div>
+                  <button
+                    onClick={() => window.open(url, '_blank', 'width=1000,height=650,menubar=no,toolbar=no,location=no')}
+                    style={{ background: '#6366f1', border: 'none', borderRadius: 10, color: '#fff', cursor: 'pointer', padding: '11px 28px', fontSize: 14, fontWeight: 700, fontFamily: 'inherit' }}>
+                    Open Live View ↗
+                  </button>
+                </div>
+              ) : (
+                <iframe key={url} src={url} style={{ width: '100%', height: 394, border: 'none', display: 'block' }} allowFullScreen title={`${panel.plate} CH${ch}`} />
+              )}
             </div>
           </div>
         );

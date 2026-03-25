@@ -19,7 +19,25 @@ const app  = express();
 const PORT = process.env.PORT || 3000;
 
 // ── Security & middleware ──────────────────────────────────────────────────
-app.use(helmet());
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc:  ["'self'"],
+      scriptSrc:   ["'self'"],
+      styleSrc:    ["'self'", 'https:', "'unsafe-inline'"],
+      fontSrc:     ["'self'", 'https:', 'data:'],
+      imgSrc:      ["'self'", 'data:'],
+      // Allow Nominatim for reverse geocoding (location names on map)
+      connectSrc:  ["'self'", 'https://nominatim.openstreetmap.org'],
+      // Allow CMSV6 video player iframe (HTTP — do NOT add upgrade-insecure-requests)
+      frameSrc:    ["'self'", 'http://13.53.215.88', 'http://13.53.215.88:6604'],
+      workerSrc:   ["'self'", 'blob:'],
+      objectSrc:   ["'none'"],
+      // Note: upgrade-insecure-requests is intentionally omitted —
+      // the CMSV6 video server is HTTP-only and must not be upgraded to HTTPS.
+    },
+  },
+}));
 app.use(cors());
 app.use(express.json());
 app.use(morgan('combined', { stream: { write: (msg) => logger.info(msg.trim()) } }));
