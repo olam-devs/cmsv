@@ -1,49 +1,114 @@
 {
   "dailyStats": {
     "14682601177": {
-      "date": "2026-03-25",
+      "date": "2026-03-26",
       "fuelStartOfDay": 216.47,
       "totalUptimeSecs": 0,
       "totalFuelConsumedDuringOff": 0,
-      "lastAccOnTime": 1774386010347
+      "lastAccOnTime": 1774506896954
     },
     "14682601263": {
-      "date": "2026-03-25",
-      "fuelStartOfDay": 2532.72,
-      "totalUptimeSecs": 4906,
-      "totalFuelConsumedDuringOff": 27,
+      "date": "2026-03-26",
+      "fuelStartOfDay": 1782.72,
+      "totalUptimeSecs": 0,
+      "totalFuelConsumedDuringOff": 0,
       "lastAccOnTime": null
     },
     "14682601264": {
-      "date": "2026-03-25",
-      "fuelStartOfDay": 1887.12,
-      "totalUptimeSecs": 6845,
-      "totalFuelConsumedDuringOff": 2369.5,
-      "lastAccOnTime": 1774458837154
+      "date": "2026-03-26",
+      "fuelStartOfDay": 101.84,
+      "totalUptimeSecs": 0,
+      "totalFuelConsumedDuringOff": 0,
+      "lastAccOnTime": 1774506896954
     },
     "14682601265": {
-      "date": "2026-03-25",
+      "date": "2026-03-26",
       "fuelStartOfDay": 995.56,
-      "totalUptimeSecs": 7594,
-      "totalFuelConsumedDuringOff": 0,
-      "lastAccOnTime": null
+      "totalUptimeSecs": 0,
+      "totalFuelConsumedDuringOff": 194,
+      "lastAccOnTime": 1774506896954
     },
     "14682601266": {
-      "date": "2026-03-25",
+      "date": "2026-03-26",
       "fuelStartOfDay": null,
       "totalUptimeSecs": 0,
       "totalFuelConsumedDuringOff": 0,
-      "lastAccOnTime": 1774386010347
+      "lastAccOnTime": 1774506896954
     },
     "14682601267": {
-      "date": "2026-03-25",
+      "date": "2026-03-26",
       "fuelStartOfDay": null,
-      "totalUptimeSecs": 8900,
+      "totalUptimeSecs": 0,
       "totalFuelConsumedDuringOff": 0,
-      "lastAccOnTime": null
+      "lastAccOnTime": 1774506896954
     }
   },
   "eventHistory": [
+    {
+      "type": "acc_on",
+      "plate": "T162EHC",
+      "vehicleName": "T162EHC",
+      "devIdno": "14682601267",
+      "fuel": 0,
+      "time": "2026-03-26T06:34:56.954Z",
+      "downtimeSecs": 58238,
+      "downtimeStr": "16h 10m",
+      "fuelConsumedDuringOff": null,
+      "lat": -6.500666,
+      "lng": 38.237626
+    },
+    {
+      "type": "vehicle_online",
+      "plate": "T407EBQ",
+      "vehicleName": "T407EBQ",
+      "devIdno": "14682601266",
+      "fuel": 0,
+      "time": "2026-03-26T06:34:56.954Z",
+      "offlineSecs": 140746,
+      "offlineStr": "39h 5m",
+      "lat": -6.504042,
+      "lng": 38.23998
+    },
+    {
+      "type": "acc_on",
+      "plate": "T245EHC",
+      "vehicleName": "T245EHC",
+      "devIdno": "14682601265",
+      "fuel": 995.6,
+      "time": "2026-03-26T06:34:56.954Z",
+      "downtimeSecs": 60039,
+      "downtimeStr": "16h 40m",
+      "fuelConsumedDuringOff": 194,
+      "lat": -6.506319,
+      "lng": 38.243221
+    },
+    {
+      "type": "vehicle_online",
+      "plate": "T245EHC",
+      "vehicleName": "T245EHC",
+      "devIdno": "14682601265",
+      "fuel": 995.6,
+      "time": "2026-03-26T06:34:56.954Z",
+      "offlineSecs": 59828,
+      "offlineStr": "16h 37m",
+      "lat": -6.506319,
+      "lng": 38.243221
+    },
+    {
+      "type": "fuel_theft_suspected",
+      "plate": "T245EHC",
+      "vehicleName": "T245EHC",
+      "devIdno": "14682601265",
+      "fuelBefore": 1189.6,
+      "fuelNow": 995.6,
+      "fuelDrop": 194,
+      "time": "2026-03-26T06:34:56.954Z",
+      "offlineSecs": 59828,
+      "offlineStr": "16h 37m",
+      "accOnAtOffline": false,
+      "lat": -6.506319,
+      "lng": 38.243221
+    },
     {
       "type": "acc_on",
       "plate": "T972EHX",
@@ -1088,8 +1153,8 @@
   ],
   "lastNonZeroFuel": {
     "14682601177": 216.47,
-    "14682601263": 2074.72,
-    "14682601264": 1159.48,
-    "14682601265": 1187.56
+    "14682601263": 1761.72,
+    "14682601264": 257.84,
+    "14682601265": 995.56
   }
 }

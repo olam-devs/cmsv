@@ -64,7 +64,7 @@ function rewriteCmsUrls(body, cmsHost) {
     .replace(new RegExp(`https?://${escaped}(?=[/:])`, 'gi'), '/api/video/static');
 }
 
-function cmsHttpProxy(port, pathPrefix) {
+function cmsHttpProxy(port, pathPrefix, { streamMode = false } = {}) {
   return (req, res) => {
     const cmsHost = getCmsHost();
     const urlPath = req.url.replace(pathPrefix, '') || '/';
@@ -72,7 +72,8 @@ function cmsHttpProxy(port, pathPrefix) {
       hostname: cmsHost, port,
       path: urlPath, method: 'GET',
       headers: { 'User-Agent': 'StarLink-Fleet/1.0', host: cmsHost },
-      timeout: 15000,
+      // No timeout for live video streams — FLV is a long-running HTTP response
+      ...(streamMode ? {} : { timeout: 15000 }),
     };
     const pr = http.request(opts, proxyRes => {
       const ct = proxyRes.headers['content-type'] || '';
@@ -130,8 +131,8 @@ app.get('/api/video/player', (req, res) => {
 /** /api/video/static/* — Proxy port-80 resources (JS, CSS, images) */
 app.use('/api/video/static', cmsHttpProxy(80, '/api/video/static'));
 
-/** /api/video/stream/* — Proxy port-6604 video streams (FLV/HLS) */
-app.use('/api/video/stream', cmsHttpProxy(6604, '/api/video/stream'));
+/** /api/video/stream/* — Proxy port-6604 video streams (FLV/HLS); streamMode disables timeout */
+app.use('/api/video/stream', cmsHttpProxy(6604, '/api/video/stream', { streamMode: true }));
 
 // ── HLS video stream proxy (before auth/rate-limiter — jsession in query param) ──
 // Proxies CMSV6 HTTP video streams so they work on the HTTPS production site.

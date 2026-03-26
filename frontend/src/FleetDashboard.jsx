@@ -3282,37 +3282,55 @@ function fmtDur(ms) {
   return `${s}s`;
 }
 
-// ── Single camera cell (HLS) inside the 6-cam grid ─────────────────────────
+// ── Load mpegts.js for HTTP-FLV live streaming ──────────────────────────────
+function useMpegts() {
+  const [mpegts, setMpegts] = useState(null);
+  useEffect(() => {
+    if (window.mpegts) { setMpegts(() => window.mpegts); return; }
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/mpegts.js@1.7.3/dist/mpegts.min.js';
+    s.onload = () => setMpegts(() => window.mpegts);
+    s.onerror = () => {};
+    document.head.appendChild(s);
+  }, []);
+  return mpegts;
+}
+
+// ── Single camera cell — HTTP-FLV via mpegts.js (no WebSocket needed) ───────
+// Stream URL: /api/video/stream/flv/1_<devIdno>_<ch0>_1.flv?jsession=<token>
+// Our HTTP proxy pipes the FLV bytes from CMSV6:6604 straight to the browser.
 function CameraCell({ devIdno, channel, jsession }) {
-  const videoRef = useRef(null);
-  const hlsRef   = useRef(null);
-  const [status, setStatus] = useState('loading'); // 'loading' | 'live' | 'error'
-  const Hls = useHlsJs();
-  const hlsUrl = `/api/video/hls?devIdno=${devIdno}&channel=${channel}&stream=1&jsession=${jsession}`;
+  const videoRef  = useRef(null);
+  const playerRef = useRef(null);
+  const [status, setStatus] = useState('loading');
+  const mpegts = useMpegts();
+
+  const ch0    = channel - 1; // CMSV6 uses 0-based channel index in stream filenames
+  const flvUrl = `/api/video/stream/flv/1_${devIdno}_${ch0}_1.flv?jsession=${jsession}`;
 
   useEffect(() => {
-    if (!Hls || !videoRef.current) return;
-    if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
+    if (!mpegts || !videoRef.current) return;
+    if (playerRef.current) { try { playerRef.current.destroy(); } catch (_) {} playerRef.current = null; }
     setStatus('loading');
-    if (Hls.isSupported()) {
-      const hls = new Hls({ lowLatencyMode: true, enableWorker: true, maxBufferLength: 10, maxLoadingDelay: 4 });
-      hls.loadSource(hlsUrl);
-      hls.attachMedia(videoRef.current);
-      hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        setStatus('live');
-        videoRef.current?.play().catch(() => {});
-      });
-      hls.on(Hls.Events.ERROR, (_, d) => { if (d.fatal) setStatus('error'); });
-      hlsRef.current = hls;
-    } else if (videoRef.current?.canPlayType('application/vnd.apple.mpegurl')) {
-      videoRef.current.src = hlsUrl;
-      videoRef.current.play().catch(() => {});
+
+    if (!mpegts.isSupported()) { setStatus('error'); return; }
+
+    const player = mpegts.createPlayer(
+      { type: 'flv', isLive: true, url: flvUrl },
+      { enableWorker: true, liveBufferLatencyChasing: true,
+        liveBufferLatencyMaxLatency: 3.0, liveBufferLatencyMinRemain: 0.5 }
+    );
+    player.attachMediaElement(videoRef.current);
+    player.on(mpegts.Events.ERROR, () => setStatus('error'));
+    player.on(mpegts.Events.MEDIA_INFO, () => {
       setStatus('live');
-    } else {
-      setStatus('error');
-    }
-    return () => { if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; } };
-  }, [Hls, hlsUrl]);
+      videoRef.current?.play().catch(() => {});
+    });
+    player.load();
+    playerRef.current = player;
+
+    return () => { try { player.destroy(); } catch (_) {} playerRef.current = null; };
+  }, [mpegts, flvUrl]);
 
   return (
     <div style={{ position: 'relative', background: '#0d0d0d', aspectRatio: '4/3', overflow: 'hidden' }}>
@@ -3435,15 +3453,12 @@ function MapCameraOverlay({ panels, onClosePanel }) {
                 ✕
               </button>
             </div>
-            {/* channel=6 = CMSV6 native all-cameras grid, proxied to avoid mixed-content.
-                WebSocket video frames tunnel through /api/video/stream via server.on('upgrade') */}
-            <iframe
-              key={`${panel.devIdno}-${panel.jsession}`}
-              src={`/api/video/player?devIdno=${panel.devIdno}&channel=6&stream=1&jsession=${panel.jsession}&api_key=${API_KEY}`}
-              style={{ width: '100%', height: PANEL_CAM_H, border: 'none', display: 'block', background: '#000' }}
-              allow="autoplay"
-              title={panel.plate}
-            />
+            {/* 6 HTTP-FLV streams via mpegts.js — no WebSocket, works over HTTPS proxy */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 2, background: '#000', padding: 2 }}>
+              {[1, 2, 3, 4, 5, 6].map(ch => (
+                <CameraCell key={ch} devIdno={panel.devIdno} channel={ch} jsession={panel.jsession} />
+              ))}
+            </div>
           </div>
         );
       })}
