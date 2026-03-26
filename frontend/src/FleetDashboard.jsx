@@ -37,14 +37,11 @@ function openLiveStream(vehicle) {
   const slot = _streamSlot++ % 4;
   const g = _streamWindowGeometry(slot);
   const features = `width=${g.width},height=${g.height},left=${g.left},top=${g.top},resizable=yes,scrollbars=no`;
-  // Open synchronously to avoid popup blocker, then navigate once URL is fetched
+  // Open synchronously to avoid popup blocker, navigate to playerUrl directly
+  // (CMSV6 player blocks iframe embedding so no wrapper page can be used)
   const win = window.open('about:blank', '_blank', features);
-  const plate = encodeURIComponent(vehicle.plate || vehicle.devIdno || '');
   apiFetch(`/cameras/${encodeURIComponent(vehicle.devIdno)}/stream?channel=6`)
-    .then(d => {
-      if (win && !win.closed)
-        win.location.href = `/stream-window.html?url=${encodeURIComponent(d.playerUrl)}&plate=${plate}&slot=${slot}`;
-    })
+    .then(d => { if (win && !win.closed) win.location.href = d.playerUrl; })
     .catch(() => { if (win && !win.closed) win.close(); });
 }
 
