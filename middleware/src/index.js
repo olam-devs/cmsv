@@ -118,9 +118,26 @@ app.get('/api/video/player', (req, res) => {
     proxyRes.on('end', () => {
       let body = Buffer.concat(chunks).toString('utf8');
       body = rewriteCmsUrls(body, cmsHost);
-      // Inject base for relative URLs so player assets resolve through our proxy
-      body = body.replace(/<head>/i, `<head><base href="/api/video/static/808gps/open/player/">`);
+      // Intercept dynamic WebSocket/fetch/XHR calls that Jessibuca builds at runtime —
+      // text rewriting can't catch these since the URLs are constructed in JS.
+      const intercept = `<script>
+(function(){
+  var _cmsRe = /(?:https?|wss?):\/\/${cmsHost.replace(/\./g,'\\.')}:6604/g;
+  var _origin = location.origin;
+  var _WS = window.WebSocket;
+  window.WebSocket = function(u,p){ return new _WS(typeof u==='string'?u.replace(_cmsRe,_origin+'/api/video/stream'):u,p); };
+  window.WebSocket.prototype = _WS.prototype;
+  var _fetch = window.fetch;
+  window.fetch = function(u,o){ return _fetch(typeof u==='string'?u.replace(_cmsRe,_origin+'/api/video/stream'):u,o); };
+  var _open = XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open = function(m,u){ return _open.call(this,m,typeof u==='string'?u.replace(_cmsRe,_origin+'/api/video/stream'):u); };
+})();
+</script>`;
+      // Inject base + intercept before any other scripts so Jessibuca picks it up
+      body = body.replace(/<head>/i, `<head><base href="/api/video/static/808gps/open/player/">${intercept}`);
       res.set('Content-Type', 'text/html');
+      // Permissive CSP for this iframe — Jessibuca's asm.js decoder requires unsafe-eval
+      res.set('Content-Security-Policy', "default-src * 'unsafe-inline' 'unsafe-eval' data: blob:");
       res.send(body);
     });
   });

@@ -1956,10 +1956,90 @@ function AlarmsView({ alarms, loading, error, onRetry }) {
 
 // ── View: Live Cameras ────────────────────────────────────────────────────────
 
+function AllChannelsModal({ vehicle, onClose }) {
+  const { t } = useTheme();
+  const [modalData, setModalData] = useState(null);
+  const [loading, setLoading]     = useState(true);
+  const [error, setError]         = useState(null);
+
+  useEffect(() => {
+    if (!vehicle) return;
+    setLoading(true); setError(null); setModalData(null);
+    apiFetch(`/cameras/${encodeURIComponent(vehicle.devIdno)}/stream?channel=6`)
+      .then(d => { setModalData({ devIdno: vehicle.devIdno, plate: vehicle.plate || vehicle.nm || vehicle.devIdno, jsession: d.jsession, playerUrl: d.playerUrl }); setLoading(false); })
+      .catch(e => { setError(e.message); setLoading(false); });
+  }, [vehicle?.devIdno]);
+
+  if (!vehicle) return null;
+
+  return (
+    <div
+      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.88)", zIndex: 2000, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}
+      onClick={onClose}
+    >
+      <div
+        style={{ width: "95vw", maxWidth: 860, background: "#111827", borderRadius: 16, overflow: "hidden", boxShadow: "0 20px 60px rgba(0,0,0,0.9)" }}
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 16px", background: "#1f2937", borderBottom: "1px solid #374151" }}>
+          <div style={{ width: 7, height: 7, borderRadius: "50%", background: "#22c55e", boxShadow: "0 0 5px #22c55e" }} />
+          <span style={{ color: "#fff", fontWeight: 800, fontSize: 14, flex: 1 }}>
+            📹 {vehicle.plate || vehicle.nm || vehicle.devIdno} — All Channels
+          </span>
+          {modalData?.playerUrl && (
+            <button
+              onClick={() => window.open(modalData.playerUrl.replace(/channel=\d+/, "channel=6"), "_blank", "width=1100,height=720,menubar=no,toolbar=no,location=no")}
+              title="Open in new window"
+              style={{ background: "transparent", border: "1px solid #374151", borderRadius: 6, color: "#9ca3af", cursor: "pointer", fontSize: 11, padding: "3px 8px", fontFamily: "inherit" }}>
+              ↗ Fullscreen
+            </button>
+          )}
+          <button
+            onClick={onClose}
+            style={{ background: "#ef444422", border: "1px solid #ef444455", borderRadius: 6, color: "#ef4444", cursor: "pointer", fontSize: 14, padding: "3px 9px", lineHeight: 1 }}>
+            ✕
+          </button>
+        </div>
+
+        {/* Body */}
+        <div style={{ background: "#000", padding: 4, minHeight: 320 }}>
+          {loading && (
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 320, flexDirection: "column", gap: 10 }}>
+              <div style={{ fontSize: 32 }}>📡</div>
+              <div style={{ color: "#6b7280", fontSize: 13 }}>Connecting…</div>
+            </div>
+          )}
+          {!loading && error && (
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 320, flexDirection: "column", gap: 10 }}>
+              <div style={{ fontSize: 28 }}>⚠️</div>
+              <div style={{ color: "#ef4444", fontSize: 13 }}>{error}</div>
+            </div>
+          )}
+          {!loading && !error && modalData && (
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 3 }}>
+              {[1, 2, 3, 4, 5, 6].map(ch => (
+                <div key={ch} style={{ position: "relative", background: "#0d0d0d", aspectRatio: "4/3", overflow: "hidden" }}>
+                  <iframe
+                    src={`/api/video/player?devIdno=${encodeURIComponent(modalData.devIdno)}&channel=${ch}&stream=1&jsession=${modalData.jsession}`}
+                    style={{ width: "100%", height: "100%", border: "none", display: "block" }}
+                    allow="autoplay; fullscreen"
+                    title={`CH${ch}`}
+                  />
+                  <div style={{ position: "absolute", bottom: 2, left: 3, background: "rgba(0,0,0,0.65)", color: "#9ca3af", fontSize: 9, fontWeight: 700, padding: "1px 5px", borderRadius: 3, pointerEvents: "none" }}>CAM {ch}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function LiveCamerasView({ vehicles, erpSummary }) {
   const { t } = useTheme();
   const [streamVehicle, setStreamVehicle] = useState(null);
-  const [channel, setChannel]             = useState(1);
   const { filterBar, filtered: erpFiltered } = useFleetFilter(vehicles, erpSummary);
   const [onlineOnly, setOnlineOnly]       = useState(true);
 
@@ -2012,39 +2092,29 @@ function LiveCamerasView({ vehicles, erpSummary }) {
       )}
 
       {/* Vehicle camera cards grid */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 14 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: 14 }}>
         {displayVehicles.map(v => {
-          const isStreaming = streamVehicle?.devIdno === v.devIdno;
           const isOnline = v.online !== 0 && v.online != null;
           return (
             <div key={v.devIdno} style={{
               borderRadius: 14, overflow: "hidden",
-              border: `1.5px solid ${isStreaming ? t.accent : t.border}`,
+              border: `1.5px solid ${t.border}`,
               background: t.panel,
-              boxShadow: isStreaming ? `0 4px 20px ${t.accentGlow}` : "0 2px 8px rgba(0,0,0,0.05)",
+              boxShadow: "0 2px 8px rgba(0,0,0,0.05)",
               transition: "all 0.2s",
             }}>
               {/* Camera preview area */}
               <div style={{
-                height: 140, background: isStreaming ? "#000" : t.bgAlt,
+                height: 130, background: t.bgAlt,
                 display: "flex", alignItems: "center", justifyContent: "center",
                 position: "relative",
               }}>
-                {isStreaming ? (
-                  <SidebarVideoPlayer
-                    vehicle={v} channel={channel}
-                    onClose={() => setStreamVehicle(null)}
-                    onChannelChange={setChannel}
-                    embedded
-                  />
-                ) : (
-                  <div style={{ textAlign: "center" }}>
-                    <div style={{ fontSize: 36, marginBottom: 6 }}>📷</div>
-                    <div style={{ color: isOnline ? t.textSoft : t.muted, fontSize: 12 }}>
-                      {isOnline ? "Click to stream" : "Offline"}
-                    </div>
+                <div style={{ textAlign: "center" }}>
+                  <div style={{ fontSize: 36, marginBottom: 6 }}>📷</div>
+                  <div style={{ color: isOnline ? t.textSoft : t.muted, fontSize: 12 }}>
+                    {isOnline ? "6 channels available" : "Offline"}
                   </div>
-                )}
+                </div>
                 {/* Online indicator */}
                 <div style={{
                   position: "absolute", top: 8, right: 8,
@@ -2065,16 +2135,16 @@ function LiveCamerasView({ vehicles, erpSummary }) {
                   </div>
                 </div>
                 <button
-                  onClick={() => { setStreamVehicle(isStreaming ? null : v); setChannel(1); }}
+                  onClick={() => isOnline && setStreamVehicle(v)}
                   disabled={!isOnline}
                   style={{
-                    background: isStreaming ? t.red : isOnline ? `linear-gradient(135deg, ${t.accent}, ${t.accentAlt})` : t.bgAlt,
+                    background: isOnline ? `linear-gradient(135deg, ${t.accent}, ${t.accentAlt})` : t.bgAlt,
                     border: "none", borderRadius: 9, padding: "6px 14px",
                     color: isOnline ? "#fff" : t.muted, cursor: isOnline ? "pointer" : "not-allowed",
                     fontSize: 12, fontWeight: 700, fontFamily: "inherit",
-                    boxShadow: isStreaming || !isOnline ? "none" : `0 2px 10px ${t.accentGlow}`,
+                    boxShadow: isOnline ? `0 2px 10px ${t.accentGlow}` : "none",
                   }}>
-                  {isStreaming ? "■ Stop" : "▶ Stream"}
+                  ▶ Stream
                 </button>
               </div>
             </div>
@@ -2082,16 +2152,9 @@ function LiveCamerasView({ vehicles, erpSummary }) {
         })}
       </div>
 
-      {/* Full-screen video button when streaming */}
+      {/* All-channels popup modal */}
       {streamVehicle && (
-        <div style={{ position: "fixed", bottom: 24, right: 24, zIndex: 500 }}>
-          <button style={{
-            background: `linear-gradient(135deg, ${t.accent}, ${t.accentAlt})`,
-            border: "none", borderRadius: 12, padding: "12px 20px",
-            color: "#fff", cursor: "pointer", fontSize: 13, fontWeight: 700,
-            fontFamily: "inherit", boxShadow: `0 4px 20px ${t.accentGlow}`,
-          }}>📹 {streamVehicle.plate} — Ch {channel}</button>
-        </div>
+        <AllChannelsModal vehicle={streamVehicle} onClose={() => setStreamVehicle(null)} />
       )}
     </div>
   );
