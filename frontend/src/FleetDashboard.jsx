@@ -1964,15 +1964,18 @@ function LiveCamerasView({ vehicles, erpSummary }) {
 
   const displayVehicles = erpFiltered.filter(v => !onlineOnly || (v.online !== 0 && v.online != null));
 
-  // Fetch stream URL then open a named popup window — can be minimized independently
+  // Open popup synchronously (inside the user gesture) to avoid popup blocker,
+  // then navigate it to the stream URL once we have the jsession.
   const openStream = useCallback(async (v) => {
     setOpening(v.devIdno);
+    const winName = `cam_${v.devIdno}`;
+    // Must call window.open synchronously — async calls after await get blocked
+    const win = window.open('about:blank', winName, 'width=1100,height=720,menubar=no,toolbar=no,location=no,resizable=yes');
     try {
       const d = await apiFetch(`/cameras/${encodeURIComponent(v.devIdno)}/stream?channel=6`);
-      const url = d.playerUrl; // direct CMSV6 player URL, works in a new window
-      const winName = `cam_${v.devIdno}`; // named window — reuses existing if open
-      window.open(url, winName, 'width=1100,height=720,menubar=no,toolbar=no,location=no,resizable=yes');
+      if (win) win.location.href = d.playerUrl;
     } catch (e) {
+      if (win) win.close();
       alert(`Could not open stream: ${e.message}`);
     }
     setOpening(null);
