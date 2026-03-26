@@ -17,13 +17,34 @@ const API_BASE = "/api";
 const API_KEY  = "hshfd24d7998476hfbvvhfbh";
 
 // ── Live stream window manager ────────────────────────────────────────────────
-// All vehicle streams share one named popup window (cmsv_live) with a tab UI.
+let _streamSlot = 0; // cycles 0-3 for quadrant placement
+
+function _streamWindowGeometry(slot) {
+  const sw = screen.availWidth,  sh = screen.availHeight;
+  const sl = screen.availLeft || 0, st = screen.availTop || 0;
+  const w = Math.floor(sw / 2),  h = Math.floor(sh / 2);
+  const positions = [
+    { left: sl,     top: st },
+    { left: sl + w, top: st },
+    { left: sl,     top: st + h },
+    { left: sl + w, top: st + h },
+  ];
+  const p = positions[slot % 4];
+  return { left: p.left, top: p.top, width: w, height: h };
+}
+
 function openLiveStream(vehicle) {
-  // Open a blank tab synchronously (inside the click handler) so the popup
-  // blocker doesn't kill it. Then navigate it to the stream URL once fetched.
-  const win = window.open('about:blank', '_blank');
+  const slot = _streamSlot++ % 4;
+  const g = _streamWindowGeometry(slot);
+  const features = `width=${g.width},height=${g.height},left=${g.left},top=${g.top},resizable=yes,scrollbars=no`;
+  // Open synchronously to avoid popup blocker, then navigate once URL is fetched
+  const win = window.open('about:blank', '_blank', features);
+  const plate = encodeURIComponent(vehicle.plate || vehicle.devIdno || '');
   apiFetch(`/cameras/${encodeURIComponent(vehicle.devIdno)}/stream?channel=6`)
-    .then(d => { if (win && !win.closed) win.location.href = d.playerUrl; })
+    .then(d => {
+      if (win && !win.closed)
+        win.location.href = `/stream-window.html?url=${encodeURIComponent(d.playerUrl)}&plate=${plate}&slot=${slot}`;
+    })
     .catch(() => { if (win && !win.closed) win.close(); });
 }
 
@@ -3725,10 +3746,7 @@ function LiveMapView() {
     openStreamRef.current = (devIdno) => {
       const v = vehiclesRef.current.find(v => v.devIdno === devIdno);
       if (!v) return;
-      const win = window.open('about:blank', '_blank', 'width=1280,height=800,resizable=yes,scrollbars=yes');
-      apiFetch(`/cameras/${devIdno}/stream?channel=6`)
-        .then(d => { if (win && !win.closed) win.location.href = d.playerUrl; })
-        .catch(() => { if (win && !win.closed) win.close(); });
+      openLiveStream(v);
     };
   }, []);
 

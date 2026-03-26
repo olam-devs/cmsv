@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Live Stream</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { width: 100%; height: 100%; overflow: hidden; background: #0f172a; }
+#bar {
+  display: flex; align-items: center; justify-content: space-between;
+  height: 32px; padding: 0 10px;
+  background: #1e293b; border-bottom: 1px solid #334155;
+  cursor: pointer; user-select: none; flex-shrink: 0;
+}
+#bar .left { display: flex; align-items: center; gap: 8px; }
+#bar .dot { width: 7px; height: 7px; border-radius: 50%; background: #22c55e; box-shadow: 0 0 5px #22c55e; }
+#bar .plate { color: #f1f5f9; font-size: 13px; font-weight: 700; font-family: 'DM Sans', system-ui, sans-serif; }
+#bar .hint { color: #475569; font-size: 11px; font-family: system-ui, sans-serif; }
+#bar .slot-label {
+  color: #6366f1; font-size: 11px; font-weight: 700;
+  background: #1e1b4b; border: 1px solid #4338ca33;
+  border-radius: 5px; padding: 2px 7px;
+  font-family: system-ui, sans-serif;
+}
+#frame { width: 100%; height: calc(100% - 32px); border: none; display: block; }
+</style>
+</head>
+<body>
+<div id="bar">
+  <div class="left">
+    <div class="dot"></div>
+    <span class="plate" id="plate">Live Stream</span>
+  </div>
+  <div class="left" style="gap:10px">
+    <span class="hint">double-click to snap to next position</span>
+    <span class="slot-label" id="slotLabel">◰</span>
+  </div>
+</div>
+<iframe id="frame" allow="autoplay; fullscreen" allowfullscreen></iframe>
+
+<script>
+var SLOT_ICONS = ['◰', '◳', '◱', '◲'];
+var SLOT_NAMES = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
+
+var params = new URLSearchParams(location.search);
+var url    = params.get('url')   || '';
+var plate  = params.get('plate') || 'Live Stream';
+var slot   = parseInt(params.get('slot') || '0', 10);
+
+document.getElementById('plate').textContent = plate;
+document.getElementById('frame').src = url;
+updateSlotLabel();
+
+function calcGeometry(s) {
+  var sw = screen.availWidth;
+  var sh = screen.availHeight;
+  var sl = screen.availLeft || 0;
+  var st = screen.availTop  || 0;
+  // Half width/height — fits 4 on big screen, 2 side-by-side on smaller
+  var w = Math.floor(sw / 2);
+  var h = Math.floor(sh / 2);
+  var positions = [
+    { left: sl,     top: st },      // 0 top-left
+    { left: sl + w, top: st },      // 1 top-right
+    { left: sl,     top: st + h },  // 2 bottom-left
+    { left: sl + w, top: st + h },  // 3 bottom-right
+  ];
+  var p = positions[s % 4];
+  return { left: p.left, top: p.top, width: w, height: h };
+}
+
+function snapToSlot(s) {
+  var g = calcGeometry(s);
+  window.resizeTo(g.width, g.height);
+  window.moveTo(g.left, g.top);
+}
+
+function updateSlotLabel() {
+  document.getElementById('slotLabel').textContent =
+    SLOT_ICONS[slot % 4] + ' ' + SLOT_NAMES[slot % 4];
+}
+
+document.getElementById('bar').addEventListener('dblclick', function() {
+  slot = (slot + 1) % 4;
+  snapToSlot(slot);
+  updateSlotLabel();
+});
+</script>
+</body>
+</html>
