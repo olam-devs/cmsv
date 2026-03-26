@@ -17,7 +17,9 @@ const API_BASE = "/api";
 const API_KEY  = "hshfd24d7998476hfbvvhfbh";
 
 // ── Live stream window manager ────────────────────────────────────────────────
-let _streamSlot = 0; // cycles 0-3 for quadrant placement
+let _openWindows = []; // { devIdno, plate, slot, win }
+const _wmListeners = new Set();
+function _notifyWM() { _wmListeners.forEach(fn => fn([..._openWindows])); }
 
 function _streamWindowGeometry(slot) {
   const sw = screen.availWidth,  sh = screen.availHeight;
@@ -33,16 +35,40 @@ function _streamWindowGeometry(slot) {
   return { left: p.left, top: p.top, width: w, height: h };
 }
 
+function _nextFreeSlot() {
+  const used = new Set(_openWindows.filter(w => !w.win.closed).map(w => w.slot));
+  for (let i = 0; i < 4; i++) if (!used.has(i)) return i;
+  return _openWindows.length % 4; // all full, cycle
+}
+
+function moveStreamToSlot(devIdno, newSlot) {
+  const entry = _openWindows.find(w => w.devIdno === devIdno);
+  if (!entry || entry.win.closed) return;
+  const g = _streamWindowGeometry(newSlot);
+  try { entry.win.resizeTo(g.width, g.height); entry.win.moveTo(g.left, g.top); } catch {}
+  entry.slot = newSlot;
+  _notifyWM();
+}
+
 function openLiveStream(vehicle) {
-  const slot = _streamSlot++ % 4;
+  // Remove any already-closed window refs
+  _openWindows = _openWindows.filter(w => !w.win.closed);
+  // If this vehicle already has an open window, focus it instead of opening another
+  const existing = _openWindows.find(w => w.devIdno === vehicle.devIdno);
+  if (existing) { try { existing.win.focus(); } catch {} return; }
+
+  const slot = _nextFreeSlot();
   const g = _streamWindowGeometry(slot);
   const features = `width=${g.width},height=${g.height},left=${g.left},top=${g.top},resizable=yes,scrollbars=no`;
   // Open synchronously to avoid popup blocker, navigate to playerUrl directly
   // (CMSV6 player blocks iframe embedding so no wrapper page can be used)
   const win = window.open('about:blank', '_blank', features);
+  const entry = { devIdno: vehicle.devIdno, plate: vehicle.plate || vehicle.devIdno, slot, win };
+  _openWindows.push(entry);
+  _notifyWM();
   apiFetch(`/cameras/${encodeURIComponent(vehicle.devIdno)}/stream?channel=6`)
-    .then(d => { if (win && !win.closed) win.location.href = d.playerUrl; })
-    .catch(() => { if (win && !win.closed) win.close(); });
+    .then(d => { if (!win.closed) win.location.href = d.playerUrl; })
+    .catch(() => { if (!win.closed) win.close(); });
 }
 
 async function apiFetch(path, opts = {}) {
@@ -3657,6 +3683,92 @@ function VehicleDetailPanel({ devIdno, vehicles, geoNames, stateHistory, onClose
   );
 }
 
+// ── Live Window Manager (floating panel for repositioning stream windows) ──────
+
+const SLOT_LABELS = ['↖ Top-Left', '↗ Top-Right', '↙ Bot-Left', '↘ Bot-Right'];
+const SLOT_ICONS  = ['◰', '◳', '◱', '◲'];
+
+function LiveWindowManager() {
+  const { t } = useTheme();
+  const [windows, setWindows] = useState([]);
+  const [collapsed, setCollapsed] = useState(false);
+
+  useEffect(() => {
+    _wmListeners.add(setWindows);
+    // Poll every 2s to prune windows the user closed manually
+    const id = setInterval(() => {
+      const alive = _openWindows.filter(w => !w.win.closed);
+      if (alive.length !== _openWindows.length) {
+        _openWindows = alive;
+        setWindows([...alive]);
+      }
+    }, 2000);
+    return () => { _wmListeners.delete(setWindows); clearInterval(id); };
+  }, []);
+
+  if (!windows.length) return null;
+
+  return (
+    <div style={{
+      position: 'absolute', bottom: 16, left: 16, zIndex: 1000,
+      background: t.bg, border: `1px solid ${t.border}`, borderRadius: 12,
+      boxShadow: '0 4px 24px #0006', minWidth: 240, overflow: 'hidden',
+      fontFamily: "'DM Sans', system-ui, sans-serif",
+    }}>
+      {/* Header */}
+      <div
+        onClick={() => setCollapsed(c => !c)}
+        style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          padding: '8px 12px', background: t.bgAlt, cursor: 'pointer',
+          borderBottom: collapsed ? 'none' : `1px solid ${t.border}`,
+        }}
+      >
+        <span style={{ fontWeight: 700, fontSize: 12, color: t.accent }}>
+          📹 LIVE WINDOWS ({windows.length})
+        </span>
+        <span style={{ color: t.muted, fontSize: 11 }}>{collapsed ? '▲' : '▼'}</span>
+      </div>
+
+      {/* Window rows */}
+      {!collapsed && windows.map(w => (
+        <div key={w.devIdno} style={{
+          padding: '8px 12px', borderBottom: `1px solid ${t.border}`,
+          display: 'flex', flexDirection: 'column', gap: 6,
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span style={{ fontWeight: 700, fontSize: 13, color: t.text }}>{w.plate}</span>
+            <button
+              onClick={() => { try { w.win.focus(); } catch {} }}
+              style={{ background: 'transparent', border: `1px solid ${t.border}`, borderRadius: 6,
+                padding: '2px 8px', fontSize: 11, color: t.textSoft, cursor: 'pointer', fontFamily: 'inherit' }}>
+              focus
+            </button>
+          </div>
+          {/* 2×2 quadrant snap buttons */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4 }}>
+            {SLOT_ICONS.map((icon, i) => (
+              <button
+                key={i}
+                onClick={() => moveStreamToSlot(w.devIdno, i)}
+                style={{
+                  background: w.slot === i ? t.accent : t.bgAlt,
+                  border: `1px solid ${w.slot === i ? t.accent : t.border}`,
+                  borderRadius: 7, padding: '5px 4px',
+                  color: w.slot === i ? '#fff' : t.textSoft,
+                  cursor: 'pointer', fontSize: 11, fontWeight: 600,
+                  fontFamily: 'inherit', textAlign: 'center',
+                }}>
+                {icon} {SLOT_LABELS[i].split(' ')[1]}
+              </button>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ── Live Map view ──────────────────────────────────────────────────────────
 
 function LiveMapView() {
@@ -3977,6 +4089,9 @@ function LiveMapView() {
         panels={streamPanels}
         onClosePanel={(id) => setStreamPanels(prev => prev.filter(p => p.devIdno !== id))}
       />
+
+      {/* Live window manager — lets user reposition stream windows from the dashboard */}
+      <LiveWindowManager />
 
       {/* Vehicle detail panel — auto-updates, floats top-right */}
       {activePopupId && (
