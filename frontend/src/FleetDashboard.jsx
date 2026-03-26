@@ -2002,26 +2002,27 @@ function AllChannelsModal({ vehicle, onClose }) {
           </button>
         </div>
 
-        {/* Body */}
-        <div style={{ background: "#000", padding: 4, minHeight: 320 }}>
+        {/* Body — single iframe, channel=6 is CMSV6's native all-cameras grid */}
+        <div style={{ background: "#000", minHeight: 400 }}>
           {loading && (
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 320, flexDirection: "column", gap: 10 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 400, flexDirection: "column", gap: 10 }}>
               <div style={{ fontSize: 32 }}>📡</div>
               <div style={{ color: "#6b7280", fontSize: 13 }}>Connecting…</div>
             </div>
           )}
           {!loading && error && (
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 320, flexDirection: "column", gap: 10 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 400, flexDirection: "column", gap: 10 }}>
               <div style={{ fontSize: 28 }}>⚠️</div>
               <div style={{ color: "#ef4444", fontSize: 13 }}>{error}</div>
             </div>
           )}
           {!loading && !error && modalData && (
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 3 }}>
-              {[1, 2, 3, 4, 5, 6].map(ch => (
-                <CameraCell key={ch} devIdno={modalData.devIdno} channel={ch} jsession={modalData.jsession} />
-              ))}
-            </div>
+            <iframe
+              src={`/api/video/player?devIdno=${encodeURIComponent(modalData.devIdno)}&channel=6&stream=1&jsession=${modalData.jsession}`}
+              style={{ width: "100%", height: "70vh", border: "none", display: "block" }}
+              allow="autoplay; fullscreen"
+              title="All Cameras"
+            />
           )}
         </div>
       </div>

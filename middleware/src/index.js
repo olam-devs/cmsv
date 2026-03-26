@@ -120,17 +120,24 @@ app.get('/api/video/player', (req, res) => {
       body = rewriteCmsUrls(body, cmsHost);
       // Intercept dynamic WebSocket/fetch/XHR calls that Jessibuca builds at runtime —
       // text rewriting can't catch these since the URLs are constructed in JS.
+      // IMPORTANT: WebSocket replacements must keep ws:// protocol, not http://.
       const intercept = `<script>
 (function(){
-  var _cmsRe = /(?:https?|wss?):\/\/${cmsHost.replace(/\./g,'\\.')}:6604/g;
-  var _origin = location.origin;
+  var _cmsHost = '${cmsHost.replace(/\./g,'\\.')}';
+  var _wsRe   = new RegExp('wss?://' + _cmsHost + ':6604','g');
+  var _httpRe = new RegExp('https?://' + _cmsHost + ':6604','g');
+  var _wsBase   = (location.protocol==='https:'?'wss':'ws')+'://'+location.host+'/api/video/stream';
+  var _httpBase = location.origin+'/api/video/stream';
   var _WS = window.WebSocket;
-  window.WebSocket = function(u,p){ return new _WS(typeof u==='string'?u.replace(_cmsRe,_origin+'/api/video/stream'):u,p); };
+  window.WebSocket = function(u,p){
+    if(typeof u==='string'){ u=u.replace(_wsRe,_wsBase).replace(_httpRe,_wsBase); }
+    return new _WS(u,p);
+  };
   window.WebSocket.prototype = _WS.prototype;
   var _fetch = window.fetch;
-  window.fetch = function(u,o){ return _fetch(typeof u==='string'?u.replace(_cmsRe,_origin+'/api/video/stream'):u,o); };
+  window.fetch = function(u,o){ if(typeof u==='string') u=u.replace(_httpRe,_httpBase); return _fetch(u,o); };
   var _open = XMLHttpRequest.prototype.open;
-  XMLHttpRequest.prototype.open = function(m,u){ return _open.call(this,m,typeof u==='string'?u.replace(_cmsRe,_origin+'/api/video/stream'):u); };
+  XMLHttpRequest.prototype.open = function(m,u){ if(typeof u==='string') u=u.replace(_httpRe,_httpBase); return _open.call(this,m,u); };
 })();
 </script>`;
       // Inject base + intercept before any other scripts so Jessibuca picks it up
