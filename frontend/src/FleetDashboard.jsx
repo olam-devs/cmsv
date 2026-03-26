@@ -2019,15 +2019,7 @@ function AllChannelsModal({ vehicle, onClose }) {
           {!loading && !error && modalData && (
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 3 }}>
               {[1, 2, 3, 4, 5, 6].map(ch => (
-                <div key={ch} style={{ position: "relative", background: "#0d0d0d", aspectRatio: "4/3", overflow: "hidden" }}>
-                  <iframe
-                    src={`/api/video/player?devIdno=${encodeURIComponent(modalData.devIdno)}&channel=${ch}&stream=1&jsession=${modalData.jsession}`}
-                    style={{ width: "100%", height: "100%", border: "none", display: "block" }}
-                    allow="autoplay; fullscreen"
-                    title={`CH${ch}`}
-                  />
-                  <div style={{ position: "absolute", bottom: 2, left: 3, background: "rgba(0,0,0,0.65)", color: "#9ca3af", fontSize: 9, fontWeight: 700, padding: "1px 5px", borderRadius: 3, pointerEvents: "none" }}>CAM {ch}</div>
-                </div>
+                <CameraCell key={ch} devIdno={modalData.devIdno} channel={ch} jsession={modalData.jsession} />
               ))}
             </div>
           )}
@@ -3359,17 +3351,17 @@ function useMpegts() {
   return mpegts;
 }
 
-// ── Single camera cell — HTTP-FLV via mpegts.js (no WebSocket needed) ───────
-// Stream URL: /api/video/stream/flv/1_<devIdno>_<ch0>_1.flv?jsession=<token>
-// Our HTTP proxy pipes the FLV bytes from CMSV6:6604 straight to the browser.
+// ── Single camera cell — HTTP-FLV via mpegts.js ──────────────────────────────
+// Correct CMSV6 HTTP-FLV URL: /3/3?AVType=1&DevIDNO=...&Channel=ch0&Stream=1
+// Proxied through /api/video/stream → CMSV6:6604 (no mixed-content on HTTPS)
 function CameraCell({ devIdno, channel, jsession }) {
   const videoRef  = useRef(null);
   const playerRef = useRef(null);
   const [status, setStatus] = useState('loading');
   const mpegts = useMpegts();
 
-  const ch0    = channel - 1; // CMSV6 uses 0-based channel index in stream filenames
-  const flvUrl = `/api/video/stream/flv/1_${devIdno}_${ch0}_1.flv?jsession=${jsession}`;
+  const ch0    = channel - 1; // CMSV6 uses 0-based channel index
+  const flvUrl = `/api/video/stream/3/3?AVType=1&jsession=${jsession}&DevIDNO=${devIdno}&Channel=${ch0}&Stream=1`;
 
   useEffect(() => {
     if (!mpegts || !videoRef.current) return;
