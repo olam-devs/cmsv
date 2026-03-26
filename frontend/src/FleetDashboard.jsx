@@ -18,39 +18,13 @@ const API_KEY  = "hshfd24d7998476hfbvvhfbh";
 
 // ── Live stream window manager ────────────────────────────────────────────────
 // All vehicle streams share one named popup window (cmsv_live) with a tab UI.
-let _liveWin = null;
-
 function openLiveStream(vehicle) {
-  // window.open MUST be called synchronously inside the click handler —
-  // before any await — otherwise the popup blocker will block it.
-  if (!_liveWin || _liveWin.closed) {
-    _liveWin = window.open(
-      '/live.html', 'cmsv_live',
-      'width=1200,height=800,menubar=no,toolbar=no,location=no,resizable=yes'
-    );
-  } else {
-    _liveWin.focus();
-  }
-  const win = _liveWin;
-  // Fetch stream URL asynchronously after the window is already open
+  // Open a blank tab synchronously (inside the click handler) so the popup
+  // blocker doesn't kill it. Then navigate it to the stream URL once fetched.
+  const win = window.open('about:blank', '_blank');
   apiFetch(`/cameras/${encodeURIComponent(vehicle.devIdno)}/stream?channel=6`)
-    .then(d => {
-      const msg = {
-        type: 'cmsv_stream',
-        devIdno: vehicle.devIdno,
-        plate: vehicle.plate || vehicle.nm || vehicle.devIdno,
-        url: d.playerUrl,
-      };
-      // localStorage queue handles the case where live.html hasn't loaded yet
-      try {
-        const q = JSON.parse(localStorage.getItem('cmsv_live_queue') || '[]');
-        q.push(msg);
-        localStorage.setItem('cmsv_live_queue', JSON.stringify(q));
-      } catch (_) {}
-      // Also postMessage directly in case the page is already open
-      if (win && !win.closed) win.postMessage(msg, '*');
-    })
-    .catch(() => {});
+    .then(d => { if (win && !win.closed) win.location.href = d.playerUrl; })
+    .catch(() => { if (win && !win.closed) win.close(); });
 }
 
 async function apiFetch(path, opts = {}) {
