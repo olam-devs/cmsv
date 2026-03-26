@@ -16,6 +16,43 @@ L.Icon.Default.mergeOptions({
 const API_BASE = "/api";
 const API_KEY  = "hshfd24d7998476hfbvvhfbh";
 
+// ── Live stream window manager ────────────────────────────────────────────────
+// All vehicle streams share one named popup window (cmsv_live) with a tab UI.
+let _liveWin = null;
+
+function openLiveStream(vehicle) {
+  // window.open MUST be called synchronously inside the click handler —
+  // before any await — otherwise the popup blocker will block it.
+  if (!_liveWin || _liveWin.closed) {
+    _liveWin = window.open(
+      '/live.html', 'cmsv_live',
+      'width=1200,height=800,menubar=no,toolbar=no,location=no,resizable=yes'
+    );
+  } else {
+    _liveWin.focus();
+  }
+  const win = _liveWin;
+  // Fetch stream URL asynchronously after the window is already open
+  apiFetch(`/cameras/${encodeURIComponent(vehicle.devIdno)}/stream?channel=6`)
+    .then(d => {
+      const msg = {
+        type: 'cmsv_stream',
+        devIdno: vehicle.devIdno,
+        plate: vehicle.plate || vehicle.nm || vehicle.devIdno,
+        url: d.playerUrl,
+      };
+      // localStorage queue handles the case where live.html hasn't loaded yet
+      try {
+        const q = JSON.parse(localStorage.getItem('cmsv_live_queue') || '[]');
+        q.push(msg);
+        localStorage.setItem('cmsv_live_queue', JSON.stringify(q));
+      } catch (_) {}
+      // Also postMessage directly in case the page is already open
+      if (win && !win.closed) win.postMessage(msg, '*');
+    })
+    .catch(() => {});
+}
+
 async function apiFetch(path, opts = {}) {
   const { method = "GET", body, headers: extraHeaders } = opts;
   const controller = new AbortController();
@@ -1958,28 +1995,10 @@ function AlarmsView({ alarms, loading, error, onRetry }) {
 
 function LiveCamerasView({ vehicles, erpSummary }) {
   const { t } = useTheme();
-  const [opening, setOpening]   = useState(null); // devIdno currently fetching
   const { filterBar, filtered: erpFiltered } = useFleetFilter(vehicles, erpSummary);
   const [onlineOnly, setOnlineOnly] = useState(true);
 
   const displayVehicles = erpFiltered.filter(v => !onlineOnly || (v.online !== 0 && v.online != null));
-
-  // Open popup synchronously (inside the user gesture) to avoid popup blocker,
-  // then navigate it to the stream URL once we have the jsession.
-  const openStream = useCallback(async (v) => {
-    setOpening(v.devIdno);
-    const winName = `cam_${v.devIdno}`;
-    // Must call window.open synchronously — async calls after await get blocked
-    const win = window.open('about:blank', winName, 'width=1100,height=720,menubar=no,toolbar=no,location=no,resizable=yes');
-    try {
-      const d = await apiFetch(`/cameras/${encodeURIComponent(v.devIdno)}/stream?channel=6`);
-      if (win) win.location.href = d.playerUrl;
-    } catch (e) {
-      if (win) win.close();
-      alert(`Could not open stream: ${e.message}`);
-    }
-    setOpening(null);
-  }, []);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -2022,8 +2041,7 @@ function LiveCamerasView({ vehicles, erpSummary }) {
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: 14 }}>
         {displayVehicles.map(v => {
-          const isOnline  = v.online !== 0 && v.online != null;
-          const isLoading = opening === v.devIdno;
+          const isOnline = v.online !== 0 && v.online != null;
           return (
             <div key={v.devIdno} style={{
               borderRadius: 14, overflow: "hidden",
@@ -2034,7 +2052,7 @@ function LiveCamerasView({ vehicles, erpSummary }) {
                 <div style={{ textAlign: "center" }}>
                   <div style={{ fontSize: 36, marginBottom: 6 }}>📷</div>
                   <div style={{ color: isOnline ? t.textSoft : t.muted, fontSize: 12 }}>
-                    {isOnline ? "Opens in new window" : "Offline"}
+                    {isOnline ? "Opens in stream window" : "Offline"}
                   </div>
                 </div>
                 <div style={{ position: "absolute", top: 8, right: 8, width: 8, height: 8, borderRadius: "50%", background: isOnline ? t.green : t.muted, boxShadow: isOnline ? `0 0 6px ${t.green}` : "none" }} />
@@ -2050,17 +2068,17 @@ function LiveCamerasView({ vehicles, erpSummary }) {
                   </div>
                 </div>
                 <button
-                  onClick={() => isOnline && !isLoading && openStream(v)}
-                  disabled={!isOnline || isLoading}
+                  onClick={() => isOnline && openLiveStream(v)}
+                  disabled={!isOnline}
                   style={{
-                    background: isLoading ? t.bgAlt : isOnline ? `linear-gradient(135deg, ${t.accent}, ${t.accentAlt})` : t.bgAlt,
+                    background: isOnline ? `linear-gradient(135deg, ${t.accent}, ${t.accentAlt})` : t.bgAlt,
                     border: "none", borderRadius: 9, padding: "6px 14px",
-                    color: isOnline && !isLoading ? "#fff" : t.muted,
-                    cursor: isOnline && !isLoading ? "pointer" : "not-allowed",
+                    color: isOnline ? "#fff" : t.muted,
+                    cursor: isOnline ? "pointer" : "not-allowed",
                     fontSize: 12, fontWeight: 700, fontFamily: "inherit",
-                    boxShadow: isOnline && !isLoading ? `0 2px 10px ${t.accentGlow}` : "none",
+                    boxShadow: isOnline ? `0 2px 10px ${t.accentGlow}` : "none",
                   }}>
-                  {isLoading ? "…" : "▶ Stream"}
+                  ▶ Stream
                 </button>
               </div>
             </div>
@@ -4589,7 +4607,6 @@ function FleetDashboardContent() {
   const [view,        setView]        = useState("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [selectedVehicle, setSelectedVehicle] = useState(null);
-  const [videoVehicle,    setVideoVehicle]    = useState(null);
   const [sideStreamVehicle, setSideStreamVehicle] = useState(null);
   const [sideChannel,       setSideChannel]       = useState(1);
 
@@ -4994,19 +5011,13 @@ function FleetDashboardContent() {
       </div>
 
       {selectedVehicle && (
-        <VehicleModal 
-          vehicle={selectedVehicle} 
-          onClose={() => setSelectedVehicle(null)} 
+        <VehicleModal
+          vehicle={selectedVehicle}
+          onClose={() => setSelectedVehicle(null)}
           onViewVideo={() => {
-            setVideoVehicle(selectedVehicle);
+            openLiveStream(selectedVehicle);
             setSelectedVehicle(null);
           }}
-        />
-      )}
-      {videoVehicle && (
-        <VideoModal
-          vehicle={videoVehicle}
-          onClose={() => setVideoVehicle(null)}
         />
       )}
       {sideStreamVehicle && (

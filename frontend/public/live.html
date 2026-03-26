@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Live Cameras</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #0f172a; color: #f1f5f9;
+  font-family: 'DM Sans', system-ui, sans-serif;
+  height: 100vh; display: flex; flex-direction: column; overflow: hidden;
+}
+#topbar {
+  display: flex; align-items: center; gap: 4px;
+  background: #1e293b; border-bottom: 1px solid #334155;
+  padding: 0 10px; min-height: 42px; overflow-x: auto; flex-shrink: 0;
+}
+#topbar .brand {
+  color: #6366f1; font-weight: 800; font-size: 13px;
+  padding-right: 10px; border-right: 1px solid #334155;
+  margin-right: 6px; flex-shrink: 0;
+}
+.tab {
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px 12px; border-radius: 8px 8px 0 0;
+  cursor: pointer; font-size: 12px; font-weight: 600;
+  white-space: nowrap; flex-shrink: 0;
+  border: 1px solid transparent; border-bottom: none;
+  color: #94a3b8; background: transparent; transition: all 0.15s;
+}
+.tab:hover { background: #334155; color: #e2e8f0; }
+.tab.active { background: #0f172a; border-color: #334155; color: #f1f5f9; }
+.tab .dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: #22c55e; box-shadow: 0 0 5px #22c55e; flex-shrink: 0;
+}
+.tab .x {
+  font-size: 15px; color: #475569; cursor: pointer;
+  padding: 0 2px; line-height: 1; margin-left: 2px;
+}
+.tab .x:hover { color: #ef4444; }
+#panels { flex: 1; position: relative; overflow: hidden; }
+.panel { position: absolute; inset: 0; display: none; }
+.panel.active { display: block; }
+.panel iframe { width: 100%; height: 100%; border: none; display: block; }
+#empty {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 14px;
+}
+#empty .ico { font-size: 52px; }
+#empty .msg { color: #475569; font-size: 14px; text-align: center; }
+</style>
+</head>
+<body>
+<div id="topbar">
+  <span class="brand">📹 LIVE CAMERAS</span>
+</div>
+<div id="panels">
+  <div id="empty">
+    <div class="ico">📷</div>
+    <div class="msg">No streams open.<br>Click "Live Camera" on any vehicle in the dashboard.</div>
+  </div>
+</div>
+
+<script>
+var streams = {};
+
+function addStream(devIdno, plate, url) {
+  if (streams[devIdno]) {
+    activate(devIdno);
+    return;
+  }
+  streams[devIdno] = true;
+  document.getElementById('empty').style.display = 'none';
+
+  // Tab
+  var tab = document.createElement('div');
+  tab.className = 'tab';
+  tab.id = 'tab_' + devIdno;
+  tab.innerHTML =
+    '<span class="dot"></span>' +
+    '<span>' + plate + '</span>' +
+    '<span class="x" id="x_' + devIdno + '">×</span>';
+  tab.addEventListener('click', function(e) {
+    if (e.target.id === 'x_' + devIdno) { removeStream(devIdno); return; }
+    activate(devIdno);
+  });
+  document.getElementById('topbar').appendChild(tab);
+
+  // Panel
+  var panel = document.createElement('div');
+  panel.className = 'panel';
+  panel.id = 'panel_' + devIdno;
+  panel.innerHTML = '<iframe src="' + url + '" allow="autoplay; fullscreen" allowfullscreen></iframe>';
+  document.getElementById('panels').appendChild(panel);
+
+  activate(devIdno);
+}
+
+function activate(devIdno) {
+  document.querySelectorAll('.tab').forEach(function(t) { t.classList.remove('active'); });
+  document.querySelectorAll('.panel').forEach(function(p) { p.classList.remove('active'); });
+  var tab = document.getElementById('tab_' + devIdno);
+  var panel = document.getElementById('panel_' + devIdno);
+  if (tab) tab.classList.add('active');
+  if (panel) panel.classList.add('active');
+}
+
+function removeStream(devIdno) {
+  delete streams[devIdno];
+  var tab = document.getElementById('tab_' + devIdno);
+  var panel = document.getElementById('panel_' + devIdno);
+  if (tab) tab.remove();
+  if (panel) panel.remove();
+  var remaining = Object.keys(streams);
+  if (remaining.length) {
+    activate(remaining[remaining.length - 1]);
+  } else {
+    document.getElementById('empty').style.display = 'flex';
+  }
+}
+
+function processPending() {
+  try {
+    var list = JSON.parse(localStorage.getItem('cmsv_live_queue') || '[]');
+    if (!list.length) return;
+    localStorage.removeItem('cmsv_live_queue');
+    list.forEach(function(s) { addStream(s.devIdno, s.plate, s.url); });
+  } catch(e) {}
+}
+
+window.addEventListener('message', function(e) {
+  if (e.data && e.data.type === 'cmsv_stream') {
+    addStream(e.data.devIdno, e.data.plate, e.data.url);
+  }
+});
+
+window.addEventListener('storage', function(e) {
+  if (e.key === 'cmsv_live_queue') processPending();
+});
+
+// Process anything already queued before the page finished loading
+processPending();
+setTimeout(processPending, 400);
+</script>
+</body>
+</html>
