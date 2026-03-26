@@ -3722,22 +3722,15 @@ function LiveMapView() {
 
   // Stream opener — stored in ref so Leaflet popup events always see latest
   useEffect(() => {
-    openStreamRef.current = async (devIdno) => {
-      if (streamPanels.find(p => p.devIdno === devIdno)) return;
+    openStreamRef.current = (devIdno) => {
       const v = vehiclesRef.current.find(v => v.devIdno === devIdno);
       if (!v) return;
-      try {
-        // Single fetch — we only need jsession + playerUrl; HLS URLs are computed on-the-fly
-        const data = await apiFetch(`/cameras/${devIdno}/stream?channel=1`);
-        setStreamPanels(prev => [...prev, {
-          devIdno,
-          plate: v.plate || devIdno,
-          jsession: data.jsession,
-          playerUrl: data.playerUrl,  // kept for "Open in new window" fallback
-        }]);
-      } catch {}
+      const win = window.open('about:blank', '_blank', 'width=1280,height=800,resizable=yes,scrollbars=yes');
+      apiFetch(`/cameras/${devIdno}/stream?channel=6`)
+        .then(d => { if (win && !win.closed) win.location.href = d.playerUrl; })
+        .catch(() => { if (win && !win.closed) win.close(); });
     };
-  }, [streamPanels]);
+  }, []);
 
   // Init Leaflet map + cluster group once
   useEffect(() => {
