@@ -53,9 +53,6 @@ function moveStreamToSlot(devIdno, newSlot) {
 function openLiveStream(vehicle) {
   // Remove any already-closed window refs
   _openWindows = _openWindows.filter(w => !w.win.closed);
-  // If this vehicle already has an open window, focus it instead of opening another
-  const existing = _openWindows.find(w => w.devIdno === vehicle.devIdno);
-  if (existing) { try { existing.win.focus(); } catch {} return; }
 
   const slot = _nextFreeSlot();
   const g = _streamWindowGeometry(slot);
