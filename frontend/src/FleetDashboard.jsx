@@ -17,51 +17,47 @@ const API_BASE = "/api";
 const API_KEY  = "hshfd24d7998476hfbvvhfbh";
 
 // ── Live stream window manager ────────────────────────────────────────────────
-let _openWindows = []; // { devIdno, plate, slot, win }
+// Each entry: { id, devIdno, plate, pos (0-8 or null), win }
+// 3×3 position grid (pos 0-8, row-major):
+//   0=top-left  1=top-center  2=top-right
+//   3=mid-left  4=center      5=mid-right
+//   6=bot-left  7=bot-center  8=bot-right
+let _openWindows = [];
+let _winIdCounter = 0;
+let _cascadeIdx   = 0;
 const _wmListeners = new Set();
 function _notifyWM() { _wmListeners.forEach(fn => fn([..._openWindows])); }
 
-function _streamWindowGeometry(slot) {
+function _streamWindowGeometry(pos) {
   const sw = screen.availWidth,  sh = screen.availHeight;
   const sl = screen.availLeft || 0, st = screen.availTop || 0;
-  const w = Math.floor(sw / 2),  h = Math.floor(sh / 2);
-  const positions = [
-    { left: sl,     top: st },
-    { left: sl + w, top: st },
-    { left: sl,     top: st + h },
-    { left: sl + w, top: st + h },
-  ];
-  const p = positions[slot % 4];
-  return { left: p.left, top: p.top, width: w, height: h };
+  const w  = Math.floor(sw / 2), h = Math.floor(sh / 2);
+  const col = pos % 3, row = Math.floor(pos / 3);
+  const lefts = [sl, sl + Math.floor(sw / 4), sl + Math.floor(sw / 2)];
+  const tops  = [st, st + Math.floor(sh / 4), st + Math.floor(sh / 2)];
+  return { left: lefts[col], top: tops[row], width: w, height: h };
 }
 
-function _nextFreeSlot() {
-  const used = new Set(_openWindows.filter(w => !w.win.closed).map(w => w.slot));
-  for (let i = 0; i < 4; i++) if (!used.has(i)) return i;
-  return _openWindows.length % 4; // all full, cycle
-}
-
-function moveStreamToSlot(devIdno, newSlot) {
-  const entry = _openWindows.find(w => w.devIdno === devIdno);
+function moveStreamToPos(id, pos) {
+  const entry = _openWindows.find(w => w.id === id);
   if (!entry || entry.win.closed) return;
-  const g = _streamWindowGeometry(newSlot);
+  const g = _streamWindowGeometry(pos);
   try { entry.win.resizeTo(g.width, g.height); entry.win.moveTo(g.left, g.top); } catch {}
-  entry.slot = newSlot;
+  entry.pos = pos;
   _notifyWM();
 }
 
 function openLiveStream(vehicle) {
-  // Remove any already-closed window refs
   _openWindows = _openWindows.filter(w => !w.win.closed);
-
-  const slot = _nextFreeSlot();
-  const g = _streamWindowGeometry(slot);
-  const features = `width=${g.width},height=${g.height},left=${g.left},top=${g.top},resizable=yes,scrollbars=no`;
-  // Open synchronously to avoid popup blocker, navigate to playerUrl directly
-  // (CMSV6 player blocks iframe embedding so no wrapper page can be used)
+  // Cascade new windows so they don't perfectly overlap each other on open
+  const offset = (_cascadeIdx++ % 8) * 28;
+  const sw = screen.availWidth, sh = screen.availHeight;
+  const w  = Math.floor(sw / 2), h = Math.floor(sh / 2);
+  const sl = (screen.availLeft || 0) + offset, st = (screen.availTop || 0) + offset;
+  const features = `width=${w},height=${h},left=${sl},top=${st},resizable=yes,scrollbars=no`;
   const win = window.open('about:blank', '_blank', features);
-  const entry = { devIdno: vehicle.devIdno, plate: vehicle.plate || vehicle.devIdno, slot, win };
-  _openWindows.push(entry);
+  const id  = ++_winIdCounter;
+  _openWindows.push({ id, devIdno: vehicle.devIdno, plate: vehicle.plate || vehicle.devIdno, pos: null, win });
   _notifyWM();
   apiFetch(`/cameras/${encodeURIComponent(vehicle.devIdno)}/stream?channel=6`)
     .then(d => { if (!win.closed) win.location.href = d.playerUrl; })
@@ -3681,9 +3677,12 @@ function VehicleDetailPanel({ devIdno, vehicles, geoNames, stateHistory, onClose
 }
 
 // ── Live Window Manager (floating panel for repositioning stream windows) ──────
-
-const SLOT_LABELS = ['↖ Top-Left', '↗ Top-Right', '↙ Bot-Left', '↘ Bot-Right'];
-const SLOT_ICONS  = ['◰', '◳', '◱', '◲'];
+// 3×3 position grid icons and labels (row-major, pos 0-8)
+const POS_GRID = [
+  ['↖','↑','↗'],
+  ['←','○','→'],
+  ['↙','↓','↘'],
+];
 
 function LiveWindowManager() {
   const { t } = useTheme();
@@ -3692,7 +3691,6 @@ function LiveWindowManager() {
 
   useEffect(() => {
     _wmListeners.add(setWindows);
-    // Poll every 2s to prune windows the user closed manually
     const id = setInterval(() => {
       const alive = _openWindows.filter(w => !w.win.closed);
       if (alive.length !== _openWindows.length) {
@@ -3709,54 +3707,44 @@ function LiveWindowManager() {
     <div style={{
       position: 'absolute', bottom: 16, left: 16, zIndex: 1000,
       background: t.bg, border: `1px solid ${t.border}`, borderRadius: 12,
-      boxShadow: '0 4px 24px #0006', minWidth: 240, overflow: 'hidden',
+      boxShadow: '0 4px 24px #0006', minWidth: 220, overflow: 'hidden',
       fontFamily: "'DM Sans', system-ui, sans-serif",
     }}>
       {/* Header */}
-      <div
-        onClick={() => setCollapsed(c => !c)}
-        style={{
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          padding: '8px 12px', background: t.bgAlt, cursor: 'pointer',
-          borderBottom: collapsed ? 'none' : `1px solid ${t.border}`,
-        }}
-      >
-        <span style={{ fontWeight: 700, fontSize: 12, color: t.accent }}>
-          📹 LIVE WINDOWS ({windows.length})
-        </span>
+      <div onClick={() => setCollapsed(c => !c)} style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        padding: '8px 12px', background: t.bgAlt, cursor: 'pointer',
+        borderBottom: collapsed ? 'none' : `1px solid ${t.border}`,
+      }}>
+        <span style={{ fontWeight: 700, fontSize: 12, color: t.accent }}>📹 LIVE WINDOWS ({windows.length})</span>
         <span style={{ color: t.muted, fontSize: 11 }}>{collapsed ? '▲' : '▼'}</span>
       </div>
 
-      {/* Window rows */}
+      {/* One row per open window */}
       {!collapsed && windows.map(w => (
-        <div key={w.devIdno} style={{
-          padding: '8px 12px', borderBottom: `1px solid ${t.border}`,
-          display: 'flex', flexDirection: 'column', gap: 6,
-        }}>
+        <div key={w.id} style={{ padding: '8px 12px', borderBottom: `1px solid ${t.border}`, display: 'flex', flexDirection: 'column', gap: 7 }}>
+          {/* Plate + focus */}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <span style={{ fontWeight: 700, fontSize: 13, color: t.text }}>{w.plate}</span>
-            <button
-              onClick={() => { try { w.win.focus(); } catch {} }}
+            <button onClick={() => { try { w.win.focus(); } catch {} }}
               style={{ background: 'transparent', border: `1px solid ${t.border}`, borderRadius: 6,
                 padding: '2px 8px', fontSize: 11, color: t.textSoft, cursor: 'pointer', fontFamily: 'inherit' }}>
               focus
             </button>
           </div>
-          {/* 2×2 quadrant snap buttons */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4 }}>
-            {SLOT_ICONS.map((icon, i) => (
-              <button
-                key={i}
-                onClick={() => moveStreamToSlot(w.devIdno, i)}
+          {/* 3×3 position grid */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 3 }}>
+            {POS_GRID.flat().map((icon, pos) => (
+              <button key={pos} onClick={() => moveStreamToPos(w.id, pos)}
                 style={{
-                  background: w.slot === i ? t.accent : t.bgAlt,
-                  border: `1px solid ${w.slot === i ? t.accent : t.border}`,
-                  borderRadius: 7, padding: '5px 4px',
-                  color: w.slot === i ? '#fff' : t.textSoft,
-                  cursor: 'pointer', fontSize: 11, fontWeight: 600,
+                  background: w.pos === pos ? t.accent : t.bgAlt,
+                  border: `1px solid ${w.pos === pos ? t.accent : t.border}`,
+                  borderRadius: 6, padding: '6px 2px',
+                  color: w.pos === pos ? '#fff' : t.textSoft,
+                  cursor: 'pointer', fontSize: 15, lineHeight: 1,
                   fontFamily: 'inherit', textAlign: 'center',
                 }}>
-                {icon} {SLOT_LABELS[i].split(' ')[1]}
+                {icon}
               </button>
             ))}
           </div>
