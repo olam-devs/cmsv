@@ -12,16 +12,179 @@
 
 const express = require('express');
 const router  = express.Router();
+const axios   = require('axios');
 const cms     = require('../services/cmsv6.service');
 const hourlyReport = require('../services/hourly-report.service');
 const { getLastNonZeroFuel } = require('../services/monitor.service');
 const erp     = require('../services/fleet-erp.service');
+const erp2    = require('../services/erp2.service');
 const logger  = require('../utils/logger');
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 const ok  = (res, data, meta = {}) => res.json({ success: true, ...meta, data });
 const err = (res, msg, status = 400) => res.status(status).json({ success: false, message: msg });
+
+// ── Manufacturer CMSV6 helpers (used by Fleet endpoints) ───────────────────
+let _mfgGpsCache = { at: 0, statuses: [], server: null };
+const _MFG_GPS_TTL_MS = 10_000;
+
+function scaleMfgStatus(raw) {
+  if (!raw) return null;
+  return {
+    devIdno: raw.devIdno || raw.id || raw.DevIDNO || null,
+    ol: raw.ol ?? 0,
+    accOn: raw.s1 != null ? (raw.s1 & 2) === 2 : null,
+    speed: raw.sp != null ? raw.sp / 10 : (raw.speed ?? 0),
+    fuel: raw.yl != null ? raw.yl / 100 : (raw.fuel ?? null),
+    lat: raw.lat != null ? raw.lat / 1_000_000 : null,
+    lng: raw.lng != null ? raw.lng / 1_000_000 : null,
+    gpsTime: raw.gpsTime ?? raw.gpstm ?? raw.gps ?? null,
+    todayKm: raw.lt != null ? raw.lt / 1000 : null,
+    signal: raw.sn ?? null,
+    satellites: raw.ns ?? null,
+    alarm: raw.alm ?? (raw.s1 ?? 0),
+  };
+}
+
+async function fetchMfgLogin() {
+  const base = (process.env.MFG_CMSV6_BASE_URL || '').replace(/\/+$/, '');
+  const user = process.env.MFG_CMSV6_USERNAME;
+  const pass = process.env.MFG_CMSV6_PASSWORD;
+  if (!base || !user || !pass) return { base: null, jsession: null };
+
+  const login = await axios.get(`${base}/StandardApiAction_login.action`, {
+    params: { account: user, password: pass },
+    maxRedirects: 0,
+    validateStatus: s => s < 400,
+    timeout: 20000,
+  });
+  const loginData = login.data || {};
+  if (loginData.result !== 0 || !loginData.jsession) return { base, jsession: null };
+  return { base, jsession: loginData.jsession };
+}
+
+async function fetchMfgVehiclesAndStatus() {
+  const { base, jsession } = await fetchMfgLogin().catch(() => ({ base: null, jsession: null }));
+  if (!base || !jsession) return { server: base, vehicles: [], statuses: [] };
+
+  const [vRes, sRes] = await Promise.allSettled([
+    axios.get(`${base}/StandardApiAction_queryUserVehicle.action`, { params: { jsession }, timeout: 20000 }),
+    (async () => {
+      const now = Date.now();
+      if (_mfgGpsCache.statuses?.length && (now - _mfgGpsCache.at) < _MFG_GPS_TTL_MS) return { data: { status: _mfgGpsCache.statuses } };
+      const r = await axios.get(`${base}/StandardApiAction_getDeviceStatus.action`, { params: { jsession }, timeout: 20000 });
+      _mfgGpsCache = { at: now, statuses: Array.isArray(r.data?.status) ? r.data.status : [], server: base };
+      return r;
+    })(),
+  ]);
+
+  const rawVehicles = vRes.status === 'fulfilled' ? (vRes.value.data?.vehicles || []) : [];
+  const vehicles = rawVehicles.map(v => ({
+    devIdno: v.dl?.[0]?.id || null,
+    plate: v.nm || v.plate || v.vid || '—',
+    nm: v.nm || null,
+    providerKey: v.dl?.[0]?.id ? `mfg:${v.dl[0].id}` : null,
+  })).filter(v => v.devIdno);
+
+  const rawStatuses = sRes.status === 'fulfilled' ? (sRes.value.data?.status || []) : [];
+  const statuses = rawStatuses.map(scaleMfgStatus).filter(Boolean);
+
+  return { server: base, vehicles, statuses };
+}
+
+async function getCombinedFleetVehicles() {
+  const [awsVehicles, awsStatuses, mfg] = await Promise.all([
+    cms.getVehicles(),
+    cms.getAllGPS().catch(() => []),
+    fetchMfgVehiclesAndStatus().catch(() => ({ vehicles: [], statuses: [] })),
+  ]);
+
+  const awsStatusMap = {};
+  for (const s of awsStatuses) {
+    if (s.devIdno) awsStatusMap[s.devIdno] = s;
+    if (s.id) awsStatusMap[s.id] = s;
+  }
+
+  const mfgStatusMap = {};
+  for (const s of (mfg.statuses || [])) {
+    if (s.devIdno) mfgStatusMap[String(s.devIdno)] = s;
+  }
+
+  const lastFuelMap = getLastNonZeroFuel();
+  const seen = new Set();
+  const out = [];
+
+  for (const v of (awsVehicles || [])) {
+    if (!v?.devIdno) continue;
+    const devIdno = String(v.devIdno);
+    seen.add(devIdno);
+    const s = awsStatusMap[devIdno] || null;
+    const rawFuel = s?.fuel ?? null;
+    const fuel = (rawFuel != null && rawFuel > 0) ? rawFuel : (lastFuelMap[devIdno] ?? (rawFuel === 0 ? 0 : null));
+    const fuelEstimated = (rawFuel == null || rawFuel === 0) && lastFuelMap[devIdno] != null;
+    out.push({
+      devIdno,
+      plate: v.plate || v.nm || '—',
+      nm: v.nm,
+      providerKey: `aws:${devIdno}`,
+      online: s?.ol ?? 0,
+      speed: s?.speed ?? 0,
+      fuel,
+      fuelEstimated,
+      lat: s?.lat ?? null,
+      lng: s?.lng ?? null,
+      todayKm: s?.todayKm ?? null,
+      gpsTime: s?.gpsTime ?? null,
+      accOn: s?.accOn ?? false,
+      signal: s?.signal ?? null,
+      satellites: s?.satellites ?? null,
+      alarm: s?.alarm ?? 0,
+    });
+  }
+
+  for (const v of (mfg.vehicles || [])) {
+    const devIdno = v?.devIdno != null ? String(v.devIdno) : null;
+    if (!devIdno || seen.has(devIdno)) continue;
+    seen.add(devIdno);
+    const s = mfgStatusMap[devIdno] || null;
+    const rawFuel = s?.fuel ?? null;
+    const fuel = (rawFuel != null && rawFuel > 0) ? rawFuel : (lastFuelMap[devIdno] ?? (rawFuel === 0 ? 0 : null));
+    const fuelEstimated = (rawFuel == null || rawFuel === 0) && lastFuelMap[devIdno] != null;
+    out.push({
+      devIdno,
+      plate: v.plate || '—',
+      nm: v.nm || null,
+      providerKey: v.providerKey || `mfg:${devIdno}`,
+      online: s?.ol ?? 0,
+      speed: s?.speed ?? 0,
+      fuel,
+      fuelEstimated,
+      lat: s?.lat ?? null,
+      lng: s?.lng ?? null,
+      todayKm: s?.todayKm ?? null,
+      gpsTime: s?.gpsTime ?? null,
+      accOn: s?.accOn ?? false,
+      signal: s?.signal ?? null,
+      satellites: s?.satellites ?? null,
+      alarm: s?.alarm ?? 0,
+    });
+  }
+
+  let extras = {};
+  try {
+    extras = erp2.getFleetExtrasByDevIdno();
+  } catch (_) {}
+
+  for (const row of out) {
+    const ex = extras[String(row.devIdno)];
+    if (!ex) continue;
+    if (ex.iconKey) row.iconKey = ex.iconKey;
+    if (ex.driver) row.driver = ex.driver;
+  }
+
+  return out;
+}
 
 function dateRange(req) {
   const { begintime, endtime, date } = req.query;
@@ -35,13 +198,102 @@ function dateRange(req) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
+//  EXTERNAL / MANUFACTURER CMSV6 (same platform, different host)
+//  Fetch vehicle list so you can discover devIdno values.
+//  Env vars:
+//    MFG_CMSV6_BASE_URL, MFG_CMSV6_USERNAME, MFG_CMSV6_PASSWORD
+//  Route:
+//    GET /api/debug/mfg/vehicles
+// ══════════════════════════════════════════════════════════════════════════
+
+router.get('/debug/mfg/vehicles', async (req, res) => {
+  const base = (process.env.MFG_CMSV6_BASE_URL || '').replace(/\/+$/, '');
+  const user = process.env.MFG_CMSV6_USERNAME;
+  const pass = process.env.MFG_CMSV6_PASSWORD;
+
+  if (!base || !user || !pass) {
+    return err(
+      res,
+      'Missing manufacturer CMS env vars. Set MFG_CMSV6_BASE_URL, MFG_CMSV6_USERNAME, MFG_CMSV6_PASSWORD',
+      500
+    );
+  }
+
+  const login = await axios.get(`${base}/StandardApiAction_login.action`, {
+    params: { account: user, password: pass },
+    maxRedirects: 0,
+    validateStatus: s => s < 400,
+    timeout: 20000,
+  });
+
+  const loginData = login.data || {};
+  if (loginData.result !== 0 || !loginData.jsession) {
+    logger.warn('[MFG] Login failed: ' + JSON.stringify(loginData).slice(0, 200));
+    return err(res, `Manufacturer login failed (result=${loginData.result ?? 'unknown'})`, 502);
+  }
+
+  const jsession = loginData.jsession;
+  const vRes = await axios.get(`${base}/StandardApiAction_queryUserVehicle.action`, {
+    params: { jsession },
+    timeout: 20000,
+  });
+
+  const rawVehicles = vRes.data?.vehicles || [];
+  const vehicles = rawVehicles.map(v => ({
+    plate:   v.nm || v.plate || v.vid || '—',
+    name:    v.nm || null,
+    // CMSV6 returns device id in dl[0].id for queryUserVehicle
+    devIdno: v.dl?.[0]?.id || null,
+    vehicleId: v.id ?? null,
+  })).filter(v => v.devIdno);
+
+  ok(res, vehicles, { count: vehicles.length, server: base });
+});
+
+// ══════════════════════════════════════════════════════════════════════════
 //  FLEET OVERVIEW
 // ══════════════════════════════════════════════════════════════════════════
 
 /** GET /api/fleet/snapshot — Real-time fleet status (primary dashboard feed) */
 router.get('/fleet/snapshot', async (req, res) => {
-  const data = await cms.getFleetSnapshot();
-  ok(res, data);
+  // Include vehicles hosted on manufacturer CMSV6 too.
+  const vehicles = await getCombinedFleetVehicles().catch(() => []);
+
+  const online = vehicles.filter(v => (v.online ?? 0) !== 0).length;
+  const offline = vehicles.filter(v => (v.online ?? 0) === 0).length;
+  const moving = vehicles.filter(v => (v.speed ?? 0) > 0).length;
+
+  const speedingLimit = 80;
+  const speeding = vehicles
+    .filter(v => (v.speed ?? 0) >= speedingLimit)
+    .slice(0, 50)
+    .map(v => ({ plate: v.plate, speed: v.speed, limit: speedingLimit }));
+
+  const offlineList = vehicles
+    .filter(v => (v.online ?? 0) === 0)
+    .slice(0, 50)
+    .map(v => ({ plate: v.plate }));
+
+  const topSpeeds = [...vehicles]
+    .sort((a, b) => (b.speed ?? 0) - (a.speed ?? 0))
+    .slice(0, 10)
+    .map(v => ({ plate: v.plate, speed: v.speed ?? 0 }));
+
+  ok(res, {
+    totals: {
+      vehicles: vehicles.length,
+      online,
+      offline,
+      moving,
+      alarming: 0,
+    },
+    alerts: {
+      speeding,
+      offline: offlineList,
+      alarming: [],
+    },
+    topSpeeds,
+  });
 });
 
 /** GET /api/fleet/summary?date=YYYY-MM-DD — Daily operations summary */
@@ -60,43 +312,7 @@ router.post('/fleet/report/trigger', async (req, res) => {
 
 /** GET /api/fleet/vehicles — All vehicles with live status merged */
 router.get('/fleet/vehicles', async (req, res) => {
-  const [vehicles, statuses] = await Promise.all([
-    cms.getVehicles(),
-    cms.getAllGPS().catch(() => []),
-  ]);
-  // CMSV6 device status uses 'devIdno' field (not 'id') as the device identifier
-  const statusMap = {};
-  for (const s of statuses) {
-    if (s.devIdno) statusMap[s.devIdno] = s;  // primary key: devIdno
-    if (s.id)     statusMap[s.id]     = s;   // fallback: id field
-  }
-  const lastFuelMap = getLastNonZeroFuel();
-  const enriched = vehicles.map(v => {
-    const s      = statusMap[v.devIdno] || null;
-    const rawFuel = s?.fuel ?? null;
-    // Use last known non-zero fuel as fallback when sensor reports 0 or null
-    const fuel    = (rawFuel != null && rawFuel > 0) ? rawFuel
-                  : (lastFuelMap[v.devIdno] ?? (rawFuel === 0 ? 0 : null));
-    const fuelEstimated = (rawFuel == null || rawFuel === 0) && lastFuelMap[v.devIdno] != null;
-    return {
-      devIdno:  v.devIdno,
-      plate:    v.plate || v.nm || '—',
-      nm:       v.nm,
-      online:   s?.ol      ?? 0,
-      speed:    s?.speed   ?? 0,
-      fuel,
-      fuelEstimated,
-      lat:      s?.lat     ?? null,
-      lng:      s?.lng     ?? null,
-      todayKm:  s?.todayKm ?? null,
-      // Extra live fields
-      gpsTime:  s?.gpsTime ?? null,
-      accOn:    s?.accOn   ?? false,   // boolean from scaleStatus
-      signal:   s?.signal  ?? null,
-      satellites: s?.satellites ?? null,
-      alarm:    s?.alarm   ?? 0,
-    };
-  });
+  const enriched = await getCombinedFleetVehicles().catch(() => []);
   ok(res, enriched, { count: enriched.length });
 });
 
@@ -207,6 +423,46 @@ router.get('/fuel/:id/report', async (req, res) => {
 router.get('/cameras/:id/stream', async (req, res) => {
   const channel    = parseInt(req.query.channel) || 1;
   const streamType = req.query.streamType || 'sub';
+  const providerKey = String(req.query.providerKey || '');
+
+  // If this device is hosted on the manufacturer CMSV6, use manufacturer session + URLs.
+  if (providerKey.startsWith('mfg:')) {
+    const base = (process.env.MFG_CMSV6_BASE_URL || '').replace(/\/+$/, '');
+    const user = process.env.MFG_CMSV6_USERNAME;
+    const pass = process.env.MFG_CMSV6_PASSWORD;
+    if (!base || !user || !pass) return err(res, 'Missing manufacturer CMS env vars', 500);
+
+    const login = await axios.get(`${base}/StandardApiAction_login.action`, {
+      params: { account: user, password: pass },
+      maxRedirects: 0,
+      validateStatus: s => s < 400,
+      timeout: 20000,
+    });
+    const loginData = login.data || {};
+    if (loginData.result !== 0 || !loginData.jsession) return err(res, 'Manufacturer login failed', 502);
+
+    const jsession = loginData.jsession;
+    const stream = streamType === 'main' ? 0 : 1;
+    const ch0 = channel - 1;
+
+    let host;
+    try { host = new URL(base).hostname; } catch { host = base.replace(/^https?:\/\//, '').split('/')[0].split(':')[0]; }
+    const videoPort = process.env.MFG_CMSV6_VIDEO_PORT || 6604;
+    const devIdno = req.params.id;
+
+    ok(res, {
+      playerUrl: `${base}/808gps/open/player/video.html?lang=en&devIdno=${encodeURIComponent(devIdno)}&channel=${channel}&stream=${stream}&jsession=${encodeURIComponent(jsession)}`,
+      hlsPageUrl: `${base}/808gps/open/hls/index.html?lang=en&devIdno=${encodeURIComponent(devIdno)}&channel=${ch0}&stream=${stream}&jsession=${encodeURIComponent(jsession)}`,
+      hlsUrl: `http://${host}:${videoPort}/hls/1_${encodeURIComponent(devIdno)}_${ch0}_${stream}.m3u8?jsession=${encodeURIComponent(jsession)}`,
+      devIdno,
+      channel: ch0,
+      stream,
+      jsession,
+      provider: 'mfg',
+    });
+    return;
+  }
+
   const data = await cms.getCameraStreamUrl(req.params.id, channel, streamType);
   ok(res, data);
 });
@@ -1245,9 +1501,20 @@ const tripSvc  = require('../services/trips.service');
 router.get('/routemgr/locations', (req, res) => ok(res, locSvc.listLocations()));
 
 router.post('/routemgr/locations', (req, res) => {
-  const { name, lat, lng, radius, color } = req.body;
-  if (!name || lat == null || lng == null) return err(res, 'name, lat, lng are required');
-  ok(res, locSvc.createLocation({ name, lat, lng, radius, color }));
+  try {
+    const { name, type = 'circle', lat, lng, radius, polygon, color } = req.body || {};
+    const trimmed = name != null ? String(name).trim() : '';
+    if (!trimmed) return err(res, 'name is required');
+    if (type === 'polygon') {
+      if (!Array.isArray(polygon) || polygon.length < 3) return err(res, 'polygon must have at least 3 vertices');
+      ok(res, locSvc.createLocation({ name: trimmed, type: 'polygon', polygon, color }));
+    } else {
+      if (lat == null || lng == null) return err(res, 'name, lat, lng are required for circle locations');
+      ok(res, locSvc.createLocation({ name: trimmed, type: 'circle', lat, lng, radius, color }));
+    }
+  } catch (e) {
+    err(res, e.message || 'Invalid location');
+  }
 });
 
 router.put('/routemgr/locations/:id', (req, res) => {

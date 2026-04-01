@@ -88,14 +88,16 @@ function getLocation(id) { return store.locations.find(l => l.id === id) || null
  * Polygon: { name, type:'polygon', polygon:[[lat,lng],...], color }
  */
 function createLocation({ name, type = 'circle', lat, lng, radius = 200, polygon, color = '#4318d1' }) {
+  const n = name != null ? String(name).trim() : '';
+  if (!n) throw new Error('name is required');
   let loc;
   if (type === 'polygon') {
     if (!Array.isArray(polygon) || polygon.length < 3) throw new Error('Polygon requires at least 3 vertices');
     const c = polygonCentroid(polygon);
-    loc = { id: newId(), name, type: 'polygon', polygon, lat: c.lat, lng: c.lng, color, createdAt: new Date().toISOString() };
+    loc = { id: newId(), name: n, type: 'polygon', polygon, lat: c.lat, lng: c.lng, color, createdAt: new Date().toISOString() };
   } else {
     if (lat == null || lng == null) throw new Error('lat and lng are required for circle locations');
-    loc = { id: newId(), name, type: 'circle', lat: Number(lat), lng: Number(lng), radius: Number(radius), color, createdAt: new Date().toISOString() };
+    loc = { id: newId(), name: n, type: 'circle', lat: Number(lat), lng: Number(lng), radius: Number(radius), color, createdAt: new Date().toISOString() };
   }
   store.locations.push(loc);
   save();

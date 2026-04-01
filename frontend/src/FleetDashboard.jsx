@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback, useRef, createContext, useContext } from "react";
+import { useState, useEffect, useCallback, useRef, createContext, useContext, useMemo } from "react";
+import { useBreakpoint } from "./useBreakpoint.js";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import "leaflet.markercluster/dist/MarkerCluster.css";
@@ -59,7 +60,7 @@ function openLiveStream(vehicle) {
   const id  = ++_winIdCounter;
   _openWindows.push({ id, devIdno: vehicle.devIdno, plate: vehicle.plate || vehicle.devIdno, pos: null, win });
   _notifyWM();
-  apiFetch(`/cameras/${encodeURIComponent(vehicle.devIdno)}/stream?channel=6`)
+  apiFetch(`/cameras/${encodeURIComponent(vehicle.devIdno)}/stream?channel=6&providerKey=${encodeURIComponent(vehicle.providerKey || "")}`)
     .then(d => { if (!win.closed) win.location.href = d.playerUrl; })
     .catch(() => { if (!win.closed) win.close(); });
 }
@@ -90,14 +91,14 @@ async function apiFetch(path, opts = {}) {
 // ── Theme ─────────────────────────────────────────────────────────────────────
 const themes = {
   dark: {
-    // Surfaces
-    bg:          "#0b1437",
-    bgAlt:       "#111c44",
-    panel:       "#111c44",
-    panelBright: "#1b2559",
-    sidebar:     "#0b1437",
-    border:      "#1b2a5e",
-    borderHi:    "#243d7a",
+    // Surfaces — softer slate (less harsh than deep navy)
+    bg:          "#151f32",
+    bgAlt:       "#1a2438",
+    panel:       "#1e293b",
+    panelBright: "#243047",
+    sidebar:     "#151f32",
+    border:      "#334155",
+    borderHi:    "#475569",
     // Brand / Accent
     accent:      "#4318d1",
     accentAlt:   "#7551ff",
@@ -117,12 +118,16 @@ const themes = {
     cyan:        "#21d4fd",
     cyanSoft:    "rgba(33,212,253,0.12)",
     // Text
-    text:        "#ffffff",
-    textSoft:    "#a3aed0",
-    muted:       "#4a6090",
+    text:        "#f1f5f9",
+    textSoft:    "#cbd5e1",
+    muted:       "#94a3b8",
     // Chart helpers
     chart1: "#4318d1", chart2: "#39b8ff", chart3: "#05cd99",
     chart4: "#ff9500", chart5: "#ee5d50",
+    /** Vehicle status: online but engine off — cyan (distinct from offline red) */
+    idleOnline: "#06b6d4",
+    /** Offline / no link — deep rose (distinct from cyan idle) */
+    offlineDeep: "#be123c",
   },
   light: {
     // Surfaces
@@ -158,10 +163,15 @@ const themes = {
     // Chart helpers
     chart1: "#4318d1", chart2: "#4299e1", chart3: "#01b574",
     chart4: "#ff9500", chart5: "#ee5d50",
+    idleOnline: "#0891b2",
+    offlineDeep: "#be123c",
   }
 };
 
-const ThemeContext = createContext({ theme: "dark", t: themes.dark, toggleTheme: () => {} });
+/** Fleet dashboard "Total fleet" truck — matches map icon set (ICONS folder) */
+const SEMI_TRAILER_ICON = `/api/icons/${encodeURIComponent("Semi trailer.png")}`;
+
+const ThemeContext = createContext({ theme: "light", t: themes.light, toggleTheme: () => {} });
 
 export function useTheme() {
   return useContext(ThemeContext);
@@ -169,7 +179,7 @@ export function useTheme() {
 
 // ── Shared UI ─────────────────────────────────────────────────────────────────
 
-function StatCard({ label, value, sub, color, icon, glow }) {
+function StatCard({ label, value, sub, color, icon, iconUrl, glow }) {
   const { t } = useTheme();
   color = color || t.accent;
   return (
@@ -192,14 +202,23 @@ function StatCard({ label, value, sub, color, icon, glow }) {
           <div style={{ color: t.text, fontSize: 36, fontWeight: 800, lineHeight: 1, letterSpacing: -1, fontFamily: "'Inter', sans-serif" }}>{value ?? "—"}</div>
           {sub && <div style={{ color: t.textSoft, fontSize: 12, marginTop: 8, fontWeight: 500 }}>{sub}</div>}
         </div>
-        {icon && (
+        {iconUrl ? (
+          <div style={{
+            background: `${color}18`,
+            borderRadius: 14, width: 48, height: 48,
+            display: "flex", alignItems: "center", justifyContent: "center",
+            flexShrink: 0,
+          }}>
+            <img src={iconUrl} alt="" style={{ maxWidth: 40, maxHeight: 40, width: "auto", height: "auto", objectFit: "contain" }} />
+          </div>
+        ) : icon ? (
           <div style={{
             background: `${color}18`,
             borderRadius: 14, width: 48, height: 48,
             display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22,
             flexShrink: 0,
           }}>{icon}</div>
-        )}
+        ) : null}
       </div>
     </div>
   );
@@ -652,611 +671,6 @@ function ErpModal({ title, onClose, children }) {
   );
 }
 
-function FleetERPView({ vehicles, onCompanySelect, activeCompanyId: activeCoid }) {
-  const { t } = useTheme();
-  const [tab,       setTab]       = useState('board');
-  const [summary,   setSummary]   = useState(null);   // { companies, categories, unassigned }
-  const [companies, setCompanies] = useState([]);
-  const [categories,setCategories]= useState([]);
-  const [loading,   setLoading]   = useState(true);
-  const [error,     setError]     = useState(null);
-
-  // Modals
-  const [coModal,     setCoModal]     = useState(null); // null | { id?, name, color, phone }
-  const [catModal,    setCatModal]    = useState(null); // null | { id?, name, color }
-  const [assignModal, setAssignModal] = useState(null); // null | { devIdno, plate, companyId, categoryId }
-  const [deleteConfirm, setDeleteConfirm] = useState(null); // null | { type, id, name, vehicleCount }
-  const [bulkSel,     setBulkSel]     = useState([]);   // devIdnos selected for bulk assign
-  const [bulkModal,   setBulkModal]   = useState(false);
-  const [vehFilter,   setVehFilter]   = useState('all'); // 'all'|'assigned'|'unassigned'
-  const [search,      setSearch]      = useState('');
-
-  const reload = async () => {
-    setLoading(true); setError(null);
-    try {
-      const [sum, cos, cats] = await Promise.all([
-        apiFetch('/erp/summary'),
-        apiFetch('/erp/companies'),
-        apiFetch('/erp/categories'),
-      ]);
-      setSummary(sum); setCompanies(cos); setCategories(cats);
-    } catch (e) { setError(e.message); }
-    setLoading(false);
-  };
-
-  useEffect(() => { reload(); }, []);
-
-  // ── Company CRUD ──────────────────────────────────────────────────────────
-
-  const saveCompany = async () => {
-    const { id, name, color, phone } = coModal;
-    if (!name.trim()) return;
-    try {
-      if (id) await apiFetch(`/erp/companies/${id}`, { method: 'PUT', body: JSON.stringify({ name, color, phone }) });
-      else    await apiFetch('/erp/companies',        { method: 'POST', body: JSON.stringify({ name, color, phone }) });
-      setCoModal(null); reload();
-    } catch (e) { alert(e.message); }
-  };
-
-  const deleteCompany = async (id) => {
-    try {
-      const r = await apiFetch(`/erp/companies/${id}`, { method: 'DELETE' });
-      if (r.vehiclesUnassigned > 0) alert(`${r.vehiclesUnassigned} vehicle(s) have been unassigned.`);
-      setDeleteConfirm(null); reload();
-    } catch (e) { alert(e.message); }
-  };
-
-  // ── Category CRUD ─────────────────────────────────────────────────────────
-
-  const saveCategory = async () => {
-    const { id, name, color } = catModal;
-    if (!name.trim()) return;
-    try {
-      if (id) await apiFetch(`/erp/categories/${id}`, { method: 'PUT', body: JSON.stringify({ name, color }) });
-      else    await apiFetch('/erp/categories',        { method: 'POST', body: JSON.stringify({ name, color }) });
-      setCatModal(null); reload();
-    } catch (e) { alert(e.message); }
-  };
-
-  const deleteCategory = async (id) => {
-    try { await apiFetch(`/erp/categories/${id}`, { method: 'DELETE' }); setDeleteConfirm(null); reload(); }
-    catch (e) { alert(e.message); }
-  };
-
-  // ── Assignments ───────────────────────────────────────────────────────────
-
-  const saveAssign = async (devIdno, companyId, categoryId) => {
-    try {
-      await apiFetch('/erp/assignments', { method: 'POST', body: JSON.stringify({ devIdno, companyId, categoryId }) });
-      setAssignModal(null); reload();
-    } catch (e) { alert(e.message); }
-  };
-
-  const unassign = async (devIdno) => {
-    try { await apiFetch(`/erp/assignments/${devIdno}`, { method: 'DELETE' }); setAssignModal(null); reload(); }
-    catch (e) { alert(e.message); }
-  };
-
-  const saveBulkAssign = async (companyId, categoryId) => {
-    try {
-      await apiFetch('/erp/assignments/bulk', { method: 'POST', body: JSON.stringify({ devIdnos: bulkSel, companyId, categoryId }) });
-      setBulkModal(false); setBulkSel([]); reload();
-    } catch (e) { alert(e.message); }
-  };
-
-  // ── Derived data ──────────────────────────────────────────────────────────
-
-  const catMap = Object.fromEntries((categories || []).map(c => [c.id, c]));
-  const coMap  = Object.fromEntries((companies  || []).map(c => [c.id, c]));
-
-  // Enrich vehicles list with assignment info
-  const vehiclesEnriched = vehicles.map(v => {
-    const a = summary ? (summary.companies.flatMap(c => c.vehicles).find(sv => sv.devIdno === v.devIdno) || null) : null;
-    return {
-      ...v,
-      companyId:  a?.companyId  || null,
-      categoryId: a?.categoryId || null,
-      plate: v.plate || v.nm || v.devIdno,
-    };
-  });
-
-  const filteredVehicles = vehiclesEnriched.filter(v => {
-    if (vehFilter === 'assigned'   && !v.companyId) return false;
-    if (vehFilter === 'unassigned' && v.companyId)  return false;
-    if (search && !v.plate.toLowerCase().includes(search.toLowerCase())) return false;
-    return true;
-  });
-
-  // ── Shared style helpers ──────────────────────────────────────────────────
-
-  const tabBtnStyle = (id) => ({
-    background: tab === id ? t.accent : 'transparent',
-    border: `1px solid ${tab === id ? t.accent : t.border}`,
-    borderRadius: 10, padding: '8px 18px', color: tab === id ? '#fff' : t.textSoft,
-    cursor: 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit',
-  });
-
-  if (loading) return <Spinner label="Loading Fleet Settings…" />;
-  if (error)   return <div style={{ padding: 24 }}><ErrorBanner message={error} onRetry={reload} /></div>;
-
-  const unassignedCount = summary?.unassigned?.length ?? 0;
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-
-      {/* Header row */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10 }}>
-        <div>
-          <h2 style={{ margin: 0, fontSize: 20, fontWeight: 800, color: t.text }}>🏢 Fleet Settings</h2>
-          <div style={{ color: t.muted, fontSize: 13, marginTop: 3 }}>
-            {companies.length} compan{companies.length === 1 ? 'y' : 'ies'} · {categories.length} categories
-            {unassignedCount > 0 && <span style={{ color: t.orange, marginLeft: 10, fontWeight: 700 }}>⚠ {unassignedCount} unassigned</span>}
-          </div>
-        </div>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <Btn onClick={() => setCatModal({ name: '', color: ERP_COLORS[2] })} color={t.green} outline style={{ fontSize: 12, padding: '7px 16px' }}>+ Category</Btn>
-          <Btn onClick={() => setCoModal({ name: '', color: ERP_COLORS[0], phone: '' })} style={{ fontSize: 12, padding: '7px 16px' }}>+ Company</Btn>
-        </div>
-      </div>
-
-      {/* Tabs */}
-      <div style={{ display: 'flex', gap: 6, borderBottom: `1px solid ${t.border}`, paddingBottom: 0 }}>
-        {[['board','🗂 Board'],['vehicles','🚌 Vehicles'],['companies','🏢 Companies'],['categories','🏷 Categories']].map(([id, lbl]) => (
-          <button key={id} onClick={() => setTab(id)} style={{
-            background: 'transparent', border: 'none', borderBottom: `2px solid ${tab === id ? t.accent : 'transparent'}`,
-            padding: '10px 18px', color: tab === id ? t.accent : t.textSoft,
-            cursor: 'pointer', fontSize: 13, fontWeight: tab === id ? 700 : 500,
-            fontFamily: 'inherit', marginBottom: -1, transition: 'all 0.15s',
-          }}>{lbl}</button>
-        ))}
-        {unassignedCount > 0 && (
-          <span style={{ alignSelf: 'center', marginLeft: 8, background: t.orange, color: '#fff', borderRadius: 20, padding: '2px 10px', fontSize: 11, fontWeight: 800 }}>
-            {unassignedCount} unassigned
-          </span>
-        )}
-      </div>
-
-      {/* ── BOARD TAB ── */}
-      {tab === 'board' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-
-          {/* Unassigned strip */}
-          {unassignedCount > 0 && (
-            <div style={{
-              background: `linear-gradient(135deg, ${t.orange}12, ${t.orange}06)`,
-              borderRadius: 16, padding: '16px 20px',
-              border: `1px dashed ${t.orange}66`,
-            }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-                <span style={{ fontSize: 18 }}>⚠️</span>
-                <span style={{ color: t.orange, fontWeight: 800, fontSize: 14 }}>Unassigned Vehicles ({unassignedCount})</span>
-                <span style={{ color: t.muted, fontSize: 12, marginLeft: 4 }}>— not linked to any company</span>
-              </div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                {(summary?.unassigned || []).map(v => (
-                  <div key={v.devIdno} style={{
-                    display: 'flex', alignItems: 'center', gap: 8,
-                    background: t.panel, borderRadius: 20, padding: '6px 14px',
-                    border: `1px solid ${t.orange}44`, cursor: 'pointer',
-                  }} onClick={() => setAssignModal({ devIdno: v.devIdno, plate: v.plate, companyId: '', categoryId: '' })}>
-                    <span style={{ fontSize: 9, color: v.online ? t.green : t.muted }}>{v.online ? '●' : '○'}</span>
-                    <span style={{ fontSize: 13, fontWeight: 600, color: t.text }}>{v.plate}</span>
-                    <span style={{ fontSize: 11, color: t.accent, fontWeight: 700 }}>Assign →</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Company cards grid */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(420px, 1fr))', gap: 16 }}>
-            {(summary?.companies || []).map(co => {
-              const coOnline  = co.vehicles.filter(v => v.online).length;
-              const coOffline = co.vehicles.length - coOnline;
-              const coAccOn   = co.vehicles.filter(v => v.accOn).length;
-              const isActive  = activeCoid === co.id;
-
-              // Group vehicles by category
-              const groups = {};
-              for (const v of co.vehicles) {
-                const key = v.categoryId || '__none__';
-                if (!groups[key]) groups[key] = [];
-                groups[key].push(v);
-              }
-
-              return (
-                <div key={co.id} style={{
-                  borderRadius: 18, overflow: 'hidden',
-                  border: `1.5px solid ${isActive ? co.color : co.color + '44'}`,
-                  boxShadow: isActive ? `0 4px 24px ${co.color}33` : '0 2px 8px rgba(0,0,0,0.06)',
-                  transition: 'box-shadow 0.2s',
-                }}>
-                  {/* Gradient header */}
-                  <div style={{
-                    background: `linear-gradient(135deg, ${co.color}ee, ${co.color}99)`,
-                    padding: '16px 18px',
-                  }}>
-                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
-                      <div style={{ width: 36, height: 36, borderRadius: 10, background: 'rgba(255,255,255,0.25)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, flexShrink: 0 }}>🏢</div>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontWeight: 800, fontSize: 15, color: '#fff', letterSpacing: -0.2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{co.name}</div>
-                        {co.phone && <div style={{ color: 'rgba(255,255,255,0.75)', fontSize: 12, marginTop: 2 }}>📞 {co.phone}</div>}
-                      </div>
-                      <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
-                        <button onClick={() => onCompanySelect && onCompanySelect(isActive ? null : co.id)} style={{
-                          background: isActive ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.2)',
-                          border: 'none', borderRadius: 8, padding: '5px 11px',
-                          color: isActive ? co.color : '#fff', fontSize: 11, cursor: 'pointer', fontFamily: 'inherit', fontWeight: 700,
-                        }}>{isActive ? '✓ Active' : 'Focus'}</button>
-                        <button onClick={() => setCoModal({ id: co.id, name: co.name, color: co.color, phone: co.phone || '' })} style={{
-                          background: 'rgba(255,255,255,0.2)', border: 'none', borderRadius: 8, padding: '5px 11px',
-                          color: '#fff', fontSize: 11, cursor: 'pointer', fontFamily: 'inherit',
-                        }}>Edit</button>
-                      </div>
-                    </div>
-                    {/* Stats row */}
-                    <div style={{ display: 'flex', gap: 16, marginTop: 12, paddingTop: 12, borderTop: '1px solid rgba(255,255,255,0.2)' }}>
-                      {[
-                        { icon: '🚌', val: co.vehicles.length, lbl: 'Total' },
-                        { icon: '🟢', val: coOnline,           lbl: 'Online' },
-                        { icon: '⚫', val: coOffline,          lbl: 'Offline' },
-                        { icon: '🔑', val: coAccOn,            lbl: 'Engine On' },
-                      ].map(({ icon, val, lbl }) => (
-                        <div key={lbl} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-                          <span style={{ fontSize: 12 }}>{icon}</span>
-                          <span style={{ color: '#fff', fontWeight: 800, fontSize: 15 }}>{val}</span>
-                          <span style={{ color: 'rgba(255,255,255,0.65)', fontSize: 11 }}>{lbl}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Vehicles body */}
-                  <div style={{ padding: '14px 16px', background: t.panel, display: 'flex', flexDirection: 'column', gap: 12 }}>
-                    {co.vehicles.length === 0 ? (
-                      <div style={{ color: t.muted, fontSize: 13, textAlign: 'center', padding: '12px 0' }}>
-                        No vehicles assigned —
-                        <span style={{ color: t.accent, cursor: 'pointer', marginLeft: 4 }} onClick={() => setTab('vehicles')}>add from Vehicles tab</span>
-                      </div>
-                    ) : Object.entries(groups).map(([catId, vlist]) => {
-                      const cat = catId !== '__none__' ? catMap[catId] : null;
-                      return (
-                        <div key={catId}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
-                            {cat && <div style={{ width: 7, height: 7, borderRadius: '50%', background: cat.color }} />}
-                            <span style={{ color: cat ? cat.color : t.muted, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.9 }}>
-                              {cat ? cat.name : 'No Category'}
-                            </span>
-                            <span style={{ color: t.muted, fontSize: 11 }}>({vlist.length})</span>
-                          </div>
-                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                            {vlist.map(v => (
-                              <div key={v.devIdno}
-                                onClick={() => setAssignModal({ devIdno: v.devIdno, plate: v.plate, companyId: v.companyId, categoryId: v.categoryId || '' })}
-                                style={{
-                                  display: 'flex', alignItems: 'center', gap: 6,
-                                  background: v.online ? t.greenSoft : t.bgAlt,
-                                  border: `1px solid ${v.online ? t.green + '55' : t.border}`,
-                                  borderRadius: 20, padding: '5px 12px', cursor: 'pointer',
-                                  transition: 'all 0.15s',
-                                }}>
-                                <span style={{ fontSize: 8, color: v.online ? t.green : t.muted, lineHeight: 1 }}>{v.online ? '●' : '●'}</span>
-                                <span style={{ fontSize: 12, fontWeight: 700, color: v.online ? t.text : t.textSoft }}>{v.plate}</span>
-                                {v.accOn && <span style={{ fontSize: 9, color: t.green, fontWeight: 800 }}>ACC</span>}
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
-          {companies.length === 0 && (
-            <div style={{
-              textAlign: 'center', padding: '60px 40px',
-              background: `linear-gradient(135deg, ${t.accentSoft}, ${t.panel})`,
-              borderRadius: 20, border: `1px dashed ${t.border}`,
-            }}>
-              <div style={{ fontSize: 52, marginBottom: 14 }}>🏢</div>
-              <div style={{ fontSize: 16, fontWeight: 800, color: t.text, marginBottom: 6 }}>No companies yet</div>
-              <div style={{ fontSize: 13, color: t.muted, marginBottom: 20 }}>Create your first company to start organising your fleet</div>
-              <Btn onClick={() => setCoModal({ name: '', color: ERP_COLORS[0], phone: '' })}>+ Create First Company</Btn>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* ── VEHICLES TAB ── */}
-      {tab === 'vehicles' && (
-        <Panel>
-          <div style={{ padding: 18 }}>
-            {/* Controls row */}
-            <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
-              <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search plate…"
-                style={{ background: t.bgAlt, border: `1px solid ${t.border}`, borderRadius: 8, padding: '8px 14px', color: t.text, fontSize: 13, fontFamily: 'inherit', outline: 'none', minWidth: 180 }} />
-              {[['all','All'],['assigned','Assigned'],['unassigned','Unassigned']].map(([val,lbl]) => (
-                <button key={val} onClick={() => setVehFilter(val)} style={{
-                  background: vehFilter === val ? t.accentSoft : 'transparent',
-                  border: `1px solid ${vehFilter === val ? t.accent : t.border}`,
-                  borderRadius: 8, padding: '7px 14px', color: vehFilter === val ? t.accent : t.textSoft,
-                  cursor: 'pointer', fontSize: 12, fontWeight: 700, fontFamily: 'inherit',
-                }}>{lbl}</button>
-              ))}
-              <div style={{ flex: 1 }} />
-              {bulkSel.length > 0 && (
-                <Btn onClick={() => setBulkModal(true)} color={t.green}>Assign {bulkSel.length} selected →</Btn>
-              )}
-            </div>
-
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-                <thead>
-                  <tr style={{ background: t.bgAlt }}>
-                    <th style={{ padding: '10px 12px', textAlign: 'left', color: t.muted, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.8, borderBottom: `1px solid ${t.border}`, width: 36 }}>
-                      <input type="checkbox"
-                        checked={bulkSel.length === filteredVehicles.length && filteredVehicles.length > 0}
-                        onChange={e => setBulkSel(e.target.checked ? filteredVehicles.map(v => v.devIdno) : [])}
-                      />
-                    </th>
-                    {['Vehicle','Status','Company','Category',''].map(h => (
-                      <th key={h} style={{ padding: '10px 14px', textAlign: 'left', color: t.muted, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.8, borderBottom: `1px solid ${t.border}`, whiteSpace: 'nowrap' }}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredVehicles.map((v, i) => {
-                    const co  = v.companyId  ? coMap[v.companyId]   : null;
-                    const cat = v.categoryId ? catMap[v.categoryId] : null;
-                    return (
-                      <tr key={v.devIdno} style={{ background: i % 2 ? t.bgAlt + '55' : 'transparent', borderBottom: `1px solid ${t.border}55` }}>
-                        <td style={{ padding: '10px 12px' }}>
-                          <input type="checkbox" checked={bulkSel.includes(v.devIdno)}
-                            onChange={e => setBulkSel(p => e.target.checked ? [...p, v.devIdno] : p.filter(x => x !== v.devIdno))} />
-                        </td>
-                        <td style={{ padding: '10px 14px', fontWeight: 700, color: t.text }}>{v.plate}</td>
-                        <td style={{ padding: '10px 14px' }}>
-                          <span style={{ color: v.online ? t.green : t.muted, fontWeight: 700, fontSize: 12 }}>{v.online ? '● Online' : '○ Offline'}</span>
-                        </td>
-                        <td style={{ padding: '10px 14px' }}>
-                          {co ? <Badge text={co.name} color={co.color} /> : <span style={{ color: t.muted, fontSize: 12 }}>—</span>}
-                        </td>
-                        <td style={{ padding: '10px 14px' }}>
-                          {cat ? <Badge text={cat.name} color={cat.color} /> : <span style={{ color: t.muted, fontSize: 12 }}>—</span>}
-                        </td>
-                        <td style={{ padding: '10px 14px', textAlign: 'right' }}>
-                          <button onClick={() => setAssignModal({ devIdno: v.devIdno, plate: v.plate, companyId: v.companyId || '', categoryId: v.categoryId || '' })}
-                            style={{ background: v.companyId ? 'transparent' : t.accent, border: `1px solid ${v.companyId ? t.border : t.accent}`, borderRadius: 8, padding: '5px 14px', color: v.companyId ? t.textSoft : '#fff', cursor: 'pointer', fontSize: 12, fontFamily: 'inherit', fontWeight: 600 }}>
-                            {v.companyId ? 'Move' : 'Assign'}
-                          </button>
-                          {v.companyId && (
-                            <button onClick={() => unassign(v.devIdno)} style={{ background: 'transparent', border: 'none', color: t.red, cursor: 'pointer', fontSize: 12, marginLeft: 6, fontFamily: 'inherit' }}>Remove</button>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                  {filteredVehicles.length === 0 && (
-                    <tr><td colSpan={6} style={{ padding: 32, textAlign: 'center', color: t.muted }}>No vehicles match filter</td></tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </Panel>
-      )}
-
-      {/* ── COMPANIES TAB ── */}
-      {tab === 'companies' && (
-        <Panel>
-          <div style={{ padding: 18 }}>
-            {companies.length === 0
-              ? <div style={{ textAlign: 'center', padding: 32, color: t.muted }}>No companies yet — click <b>+ Company</b> above</div>
-              : (
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-                  <thead>
-                    <tr style={{ background: t.bgAlt }}>
-                      {['Color','Name','Phone','Vehicles',''].map(h => (
-                        <th key={h} style={{ padding: '10px 14px', textAlign: 'left', color: t.muted, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.8, borderBottom: `1px solid ${t.border}` }}>{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {companies.map((co, i) => (
-                      <tr key={co.id} style={{ background: i % 2 ? t.bgAlt + '55' : 'transparent', borderBottom: `1px solid ${t.border}55` }}>
-                        <td style={{ padding: '10px 14px' }}><div style={{ width: 18, height: 18, borderRadius: '50%', background: co.color }} /></td>
-                        <td style={{ padding: '10px 14px', fontWeight: 700, color: t.text }}>{co.name}</td>
-                        <td style={{ padding: '10px 14px', color: t.textSoft }}>{co.phone || '—'}</td>
-                        <td style={{ padding: '10px 14px', color: t.accent, fontWeight: 700 }}>{co.vehicleCount}</td>
-                        <td style={{ padding: '10px 14px', textAlign: 'right', display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-                          <button onClick={() => setCoModal({ id: co.id, name: co.name, color: co.color, phone: co.phone || '' })}
-                            style={{ background: 'transparent', border: `1px solid ${t.border}`, borderRadius: 8, padding: '5px 14px', color: t.textSoft, cursor: 'pointer', fontSize: 12, fontFamily: 'inherit' }}>Edit</button>
-                          <button onClick={() => setDeleteConfirm({ type: 'company', id: co.id, name: co.name, vehicleCount: co.vehicleCount })}
-                            style={{ background: 'transparent', border: `1px solid ${t.red}55`, borderRadius: 8, padding: '5px 14px', color: t.red, cursor: 'pointer', fontSize: 12, fontFamily: 'inherit' }}>Delete</button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )
-            }
-          </div>
-        </Panel>
-      )}
-
-      {/* ── CATEGORIES TAB ── */}
-      {tab === 'categories' && (
-        <Panel>
-          <div style={{ padding: 18 }}>
-            {categories.length === 0
-              ? <div style={{ textAlign: 'center', padding: 32, color: t.muted }}>No categories yet — click <b>+ Category</b> above</div>
-              : (
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-                  <thead>
-                    <tr style={{ background: t.bgAlt }}>
-                      {['Color','Name','Vehicles Assigned',''].map(h => (
-                        <th key={h} style={{ padding: '10px 14px', textAlign: 'left', color: t.muted, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.8, borderBottom: `1px solid ${t.border}` }}>{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {categories.map((cat, i) => (
-                      <tr key={cat.id} style={{ background: i % 2 ? t.bgAlt + '55' : 'transparent', borderBottom: `1px solid ${t.border}55` }}>
-                        <td style={{ padding: '10px 14px' }}><div style={{ width: 18, height: 18, borderRadius: '50%', background: cat.color }} /></td>
-                        <td style={{ padding: '10px 14px', fontWeight: 700, color: t.text }}>{cat.name}</td>
-                        <td style={{ padding: '10px 14px', color: t.accent, fontWeight: 700 }}>{cat.vehicleCount}</td>
-                        <td style={{ padding: '10px 14px', textAlign: 'right', display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-                          <button onClick={() => setCatModal({ id: cat.id, name: cat.name, color: cat.color })}
-                            style={{ background: 'transparent', border: `1px solid ${t.border}`, borderRadius: 8, padding: '5px 14px', color: t.textSoft, cursor: 'pointer', fontSize: 12, fontFamily: 'inherit' }}>Edit</button>
-                          <button onClick={() => setDeleteConfirm({ type: 'category', id: cat.id, name: cat.name, vehicleCount: cat.vehicleCount })}
-                            style={{ background: 'transparent', border: `1px solid ${t.red}55`, borderRadius: 8, padding: '5px 14px', color: t.red, cursor: 'pointer', fontSize: 12, fontFamily: 'inherit' }}>Delete</button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )
-            }
-          </div>
-        </Panel>
-      )}
-
-      {/* ── MODALS ── */}
-
-      {/* Company form */}
-      {coModal && (
-        <ErpModal title={coModal.id ? 'Edit Company' : 'New Company'} onClose={() => setCoModal(null)}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-            <Inp label="Company Name *" value={coModal.name} onChange={e => setCoModal(p => ({ ...p, name: e.target.value }))} placeholder="e.g. Star Link Express" />
-            <Inp label="Phone" value={coModal.phone} onChange={e => setCoModal(p => ({ ...p, phone: e.target.value }))} placeholder="255712345678" />
-            <div>
-              <div style={{ color: t.muted, fontSize: 11, fontWeight: 700, marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.8 }}>Colour</div>
-              <ColorPicker value={coModal.color} onChange={c => setCoModal(p => ({ ...p, color: c }))} />
-            </div>
-            <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
-              <Btn onClick={saveCompany} disabled={!coModal.name.trim()}>{coModal.id ? 'Save Changes' : 'Create Company'}</Btn>
-              <Btn onClick={() => setCoModal(null)} outline color={t.muted}>Cancel</Btn>
-            </div>
-          </div>
-        </ErpModal>
-      )}
-
-      {/* Category form */}
-      {catModal && (
-        <ErpModal title={catModal.id ? 'Edit Category' : 'New Category'} onClose={() => setCatModal(null)}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-            <Inp label="Category Name *" value={catModal.name} onChange={e => setCatModal(p => ({ ...p, name: e.target.value }))} placeholder="e.g. School Buses" />
-            <div>
-              <div style={{ color: t.muted, fontSize: 11, fontWeight: 700, marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.8 }}>Colour</div>
-              <ColorPicker value={catModal.color} onChange={c => setCatModal(p => ({ ...p, color: c }))} />
-            </div>
-            <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
-              <Btn onClick={saveCategory} disabled={!catModal.name.trim()} color={t.green}>{catModal.id ? 'Save Changes' : 'Create Category'}</Btn>
-              <Btn onClick={() => setCatModal(null)} outline color={t.muted}>Cancel</Btn>
-            </div>
-          </div>
-        </ErpModal>
-      )}
-
-      {/* Assign / Move vehicle modal */}
-      {assignModal && (
-        <AssignVehicleModal
-          plate={assignModal.plate}
-          devIdno={assignModal.devIdno}
-          currentCompanyId={assignModal.companyId}
-          currentCategoryId={assignModal.categoryId}
-          companies={companies}
-          categories={categories}
-          onSave={saveAssign}
-          onUnassign={unassign}
-          onClose={() => setAssignModal(null)}
-        />
-      )}
-
-      {/* Bulk assign modal */}
-      {bulkModal && (
-        <BulkAssignModal
-          count={bulkSel.length}
-          companies={companies}
-          categories={categories}
-          onSave={saveBulkAssign}
-          onClose={() => setBulkModal(false)}
-        />
-      )}
-
-      {/* Delete confirmation */}
-      {deleteConfirm && (
-        <ErpModal title={`Delete ${deleteConfirm.type === 'company' ? 'Company' : 'Category'}`} onClose={() => setDeleteConfirm(null)}>
-          <div style={{ color: t.textSoft, fontSize: 14, lineHeight: 1.7, marginBottom: 20 }}>
-            {deleteConfirm.type === 'company'
-              ? <>Delete <b>{deleteConfirm.name}</b>? {deleteConfirm.vehicleCount > 0 && <span style={{ color: t.orange }}>{deleteConfirm.vehicleCount} vehicle(s) will become unassigned.</span>}</>
-              : <>Delete category <b>{deleteConfirm.name}</b>? {deleteConfirm.vehicleCount > 0 && <span style={{ color: t.orange }}>{deleteConfirm.vehicleCount} vehicle(s) will lose this category (they stay in their company).</span>}</>
-            }
-          </div>
-          <div style={{ display: 'flex', gap: 10 }}>
-            <Btn color={t.red} onClick={() => deleteConfirm.type === 'company' ? deleteCompany(deleteConfirm.id) : deleteCategory(deleteConfirm.id)}>Yes, Delete</Btn>
-            <Btn outline color={t.muted} onClick={() => setDeleteConfirm(null)}>Cancel</Btn>
-          </div>
-        </ErpModal>
-      )}
-    </div>
-  );
-}
-
-function AssignVehicleModal({ plate, devIdno, currentCompanyId, currentCategoryId, companies, categories, onSave, onUnassign, onClose }) {
-  const { t } = useTheme();
-  const [companyId,  setCompanyId]  = useState(currentCompanyId  || '');
-  const [categoryId, setCategoryId] = useState(currentCategoryId || '');
-  const isMove = !!currentCompanyId;
-  return (
-    <ErpModal title={isMove ? `Move ${plate}` : `Assign ${plate}`} onClose={onClose}>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-        <Sel label="Company *" value={companyId} onChange={e => setCompanyId(e.target.value)}>
-          <option value="">— Select company —</option>
-          {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-        </Sel>
-        <Sel label="Category (optional)" value={categoryId} onChange={e => setCategoryId(e.target.value)}>
-          <option value="">— No category —</option>
-          {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-        </Sel>
-        <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
-          <Btn onClick={() => onSave(devIdno, companyId, categoryId || null)} disabled={!companyId}>
-            {isMove ? 'Move Vehicle' : 'Assign Vehicle'}
-          </Btn>
-          {isMove && <Btn color={t.red} outline onClick={() => onUnassign(devIdno)}>Unassign</Btn>}
-          <Btn outline color={t.muted} onClick={onClose}>Cancel</Btn>
-        </div>
-      </div>
-    </ErpModal>
-  );
-}
-
-function BulkAssignModal({ count, companies, categories, onSave, onClose }) {
-  const [companyId,  setCompanyId]  = useState('');
-  const [categoryId, setCategoryId] = useState('');
-  return (
-    <ErpModal title={`Assign ${count} vehicles`} onClose={onClose}>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-        <Sel label="Company *" value={companyId} onChange={e => setCompanyId(e.target.value)}>
-          <option value="">— Select company —</option>
-          {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-        </Sel>
-        <Sel label="Category (optional)" value={categoryId} onChange={e => setCategoryId(e.target.value)}>
-          <option value="">— No category —</option>
-          {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-        </Sel>
-        <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
-          <Btn onClick={() => onSave(companyId, categoryId || null)} disabled={!companyId}>Assign All</Btn>
-          <Btn outline color="#888" onClick={onClose}>Cancel</Btn>
-        </div>
-      </div>
-    </ErpModal>
-  );
-}
-
 // ── View: Fuel Consumption Report ─────────────────────────────────────────────
 
 const THRESHOLD_OPTIONS = [5, 10, 15, 20, 25, 30, 40, 50];
@@ -1696,7 +1110,7 @@ function DashboardView({ snapshot, activeCompany, filteredVehicles = [] }) {
       )}
       <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
         <StatCard label={activeCompany ? "Company Fleet" : "Total Fleet"}
-          value={activeCompany ? filteredVehicles.length : totals.vehicles} sub="registered"  color={t.blue}   icon="🚌" />
+          value={activeCompany ? filteredVehicles.length : totals.vehicles} sub="registered"  color={t.blue}   iconUrl={SEMI_TRAILER_ICON} />
         <StatCard label="Online"
           value={activeCompany ? companyOnline : totals.online}
           sub={filteredVehicles.length ? `${Math.round(((activeCompany ? companyOnline : (totals.online||0)) / (activeCompany ? filteredVehicles.length : (totals.vehicles||1))) * 100)}% availability` : ""}
@@ -2251,7 +1665,7 @@ function SidebarVideoPlayer({ vehicle, channel, onClose, onChannelChange }) {
   useEffect(() => {
     if (!vehicle) return;
     setLoading(true); setError(null); setStreamData(null);
-    apiFetch(`/cameras/${encodeURIComponent(vehicle.devIdno)}/stream?channel=${channel}&streamType=${streamType}`)
+    apiFetch(`/cameras/${encodeURIComponent(vehicle.devIdno)}/stream?channel=${channel}&streamType=${streamType}&providerKey=${encodeURIComponent(vehicle.providerKey || "")}`)
       .then(d => { setStreamData(d); setLoading(false); })
       .catch(e => { setError(e.message); setLoading(false); });
   }, [vehicle?.devIdno, channel, streamType]);
@@ -2355,7 +1769,7 @@ function VideoModal({ vehicle, onClose }) {
   useEffect(() => {
     if (!vehicle) return;
     setLoading(true); setError(null); setStreamData(null);
-    apiFetch(`/cameras/${encodeURIComponent(vehicle.devIdno)}/stream?channel=${channel}&streamType=${streamType}`)
+    apiFetch(`/cameras/${encodeURIComponent(vehicle.devIdno)}/stream?channel=${channel}&streamType=${streamType}&providerKey=${encodeURIComponent(vehicle.providerKey || "")}`)
       .then(setStreamData)
       .catch(e => setError(e.message))
       .finally(() => setLoading(false));
@@ -3234,20 +2648,42 @@ async function reverseGeocode(lat, lng) {
   } catch { return null; }
 }
 
-function buildMarkerIcon(v) {
-  const color = !v.online ? '#ef4444' : v.accOn ? '#22c55e' : '#f97316';
+/** Icon image URL for live map list thumbnails (same rules as map markers). */
+function vehicleFleetIconUrl(v) {
+  const raw = v.iconKey != null ? String(v.iconKey) : '';
+  const base = raw.split(/[/\\]/).pop() || '';
+  const safe = base.trim();
+  const isBad = !safe || safe.includes('..') || safe.includes('/') || safe.includes('\\');
+  if (!isBad) return `/api/icons/${encodeURIComponent(safe)}`;
+  return SEMI_TRAILER_ICON;
+}
+
+function vehicleStatusRingColor(v, t) {
+  const off = t?.offlineDeep ?? themes.dark.offlineDeep;
+  const idle = t?.idleOnline ?? themes.dark.idleOnline;
+  return !v.online ? off : v.accOn ? (t?.green ?? "#22c55e") : idle;
+}
+
+function buildMarkerIcon(v, t) {
+  const color = vehicleStatusRingColor(v, t);
+  const raw = v.iconKey != null ? String(v.iconKey) : '';
+  const base = raw.split(/[/\\]/).pop() || '';
+  const safe = base.trim();
+  const isBad = !safe || safe.includes('..') || safe.includes('/') || safe.includes('\\');
+  const url = !isBad ? `/api/icons/${encodeURIComponent(safe)}` : SEMI_TRAILER_ICON;
   return L.divIcon({
     className: '',
-    html: `<div style="width:38px;height:38px;border-radius:50%;background:${color};border:3px solid #fff;
-      box-shadow:0 3px 10px rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;font-size:17px">🚌</div>`,
-    iconSize:    [38, 38],
-    iconAnchor:  [19, 19],
-    popupAnchor: [0, -22],
+    html: `<div style="width:44px;height:44px;border-radius:50%;border:3px solid ${color};box-shadow:0 3px 10px rgba(0,0,0,0.4);overflow:hidden;background:#fff;display:flex;align-items:center;justify-content:center">
+        <img src="${url}" alt="" style="width:38px;height:38px;object-fit:contain" />
+      </div>`,
+    iconSize: [44, 44],
+    iconAnchor: [22, 22],
+    popupAnchor: [0, -24],
   });
 }
 
-function buildPopupHtml(v, geoName) {
-  const statusColor = !v.online ? '#ef4444' : v.accOn ? '#22c55e' : '#f97316';
+function buildPopupHtml(v, geoName, t) {
+  const statusColor = vehicleStatusRingColor(v, t);
   const statusText  = !v.online ? 'Offline' : v.accOn ? 'Online · ACC ON' : 'Online · ACC OFF';
   const alarmBadge  = v.online === 2
     ? `<span style="margin-left:6px;background:#ef444422;color:#ef4444;border-radius:6px;padding:2px 8px;font-size:11px;font-weight:700">⚡ Alarm</span>`
@@ -3255,14 +2691,18 @@ function buildPopupHtml(v, geoName) {
   const streamBtn   = v.online
     ? `<button data-stream-id="${v.devIdno}" style="margin-top:10px;width:100%;padding:8px 0;background:#6366f1;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:13px;font-weight:700;font-family:inherit;display:flex;align-items:center;justify-content:center;gap:6px">📷 Live Cameras</button>`
     : '';
+  const driverHtml = v.driver?.name
+    ? `<div style="font-size:12px;color:#6b7280;margin-bottom:6px">👤 Driver: <b>${String(v.driver.name).replace(/</g, '&lt;')}</b></div>`
+    : '';
   return `<div style="font-family:'DM Sans',system-ui,sans-serif;min-width:210px;padding:4px 2px">
     <div style="font-weight:800;font-size:16px;margin-bottom:8px">${v.plate || v.devIdno}</div>
+    ${driverHtml}
     <div style="font-size:12px;color:#6b7280;margin-bottom:6px">
       📍 ${geoName || '<i style="color:#9ca3af">Fetching location…</i>'}
     </div>
     <div style="display:flex;gap:14px;font-size:12px">
       <span>🏎️ <b>${v.speed != null ? v.speed + ' km/h' : '—'}</b></span>
-      <span>🔑 <b style="color:${v.accOn ? '#22c55e' : '#94a3b8'}">ACC ${v.accOn ? 'ON' : 'OFF'}</b></span>
+      <span>🔑 <b style="color:${v.accOn ? (t?.green ?? '#22c55e') : (!v.online ? (t?.offlineDeep ?? '#be123c') : (t?.idleOnline ?? '#0891b2'))}">ACC ${v.accOn ? 'ON' : 'OFF'}</b></span>
     </div>
     <div style="margin-top:8px;display:flex;align-items:center;flex-wrap:wrap;gap:4px">
       <span style="background:${statusColor}22;color:${statusColor};border-radius:6px;padding:2px 8px;font-size:11px;font-weight:700">${statusText}</span>${alarmBadge}
@@ -3538,6 +2978,7 @@ function MapHlsPlayer({ hlsUrl, playerUrl, Hls }) {
 // ── Vehicle detail popup panel (React — auto-updates, floats over map) ─────
 function VehicleDetailPanel({ devIdno, vehicles, geoNames, stateHistory, onClose }) {
   const { t } = useTheme();
+  const narrowPanel = useBreakpoint(640);
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {
     const iv = setInterval(() => setNow(new Date()), 1000);
@@ -3549,7 +2990,7 @@ function VehicleDetailPanel({ devIdno, vehicles, geoNames, stateHistory, onClose
 
   const hist        = stateHistory[devIdno] || {};
   const geo         = geoNames[devIdno];
-  const statusColor = !v.online ? '#ef4444' : v.accOn ? '#22c55e' : '#f97316';
+  const statusColor = vehicleStatusRingColor(v, t);
   const statusLabel = !v.online ? 'Offline' : v.accOn ? 'ACC ON · Running' : 'ACC OFF · Parked';
   const alarmActive = v.online === 2 || v.alarm > 0;
 
@@ -3579,8 +3020,14 @@ function VehicleDetailPanel({ devIdno, vehicles, geoNames, stateHistory, onClose
 
   return (
     <div style={{
-      position: 'fixed', top: 76, right: 16, zIndex: 1200,
-      width: 270, background: t.panel,
+      position: 'fixed',
+      top: narrowPanel ? 72 : 76,
+      right: narrowPanel ? 12 : 16,
+      left: narrowPanel ? 12 : undefined,
+      zIndex: 1200,
+      width: narrowPanel ? 'auto' : 270,
+      maxWidth: narrowPanel ? 'min(100%, calc(100vw - 24px))' : undefined,
+      background: t.panel,
       border: `1.5px solid ${statusColor}55`,
       borderRadius: 14, overflow: 'hidden',
       boxShadow: '0 8px 32px rgba(0,0,0,0.22)',
@@ -3605,8 +3052,8 @@ function VehicleDetailPanel({ devIdno, vehicles, geoNames, stateHistory, onClose
         {/* ── OFFLINE ── */}
         {!v.online && (
           <>
-            <div style={{ background: '#ef444413', border: '1px solid #ef444430', borderRadius: 8, padding: '8px 10px', marginBottom: 8 }}>
-              <div style={{ color: '#ef4444', fontSize: 12, fontWeight: 700, marginBottom: 3 }}>⚠️ Vehicle Offline</div>
+            <div style={{ background: `${t.offlineDeep}13`, border: `1px solid ${t.offlineDeep}30`, borderRadius: 8, padding: '8px 10px', marginBottom: 8 }}>
+              <div style={{ color: t.offlineDeep, fontSize: 12, fontWeight: 700, marginBottom: 3 }}>⚠️ Vehicle Offline</div>
               {offlineDur && <div style={{ color: t.textSoft, fontSize: 12 }}>Offline for: <b style={{ color: t.text }}>{offlineDur}</b></div>}
               {lastGpsDate && <div style={{ color: t.textSoft, fontSize: 12, marginTop: 2 }}>Last seen: <b style={{ color: t.text }}>{lastGpsDate.toLocaleString()}</b></div>}
             </div>
@@ -3645,8 +3092,8 @@ function VehicleDetailPanel({ devIdno, vehicles, geoNames, stateHistory, onClose
 
             {/* ACC OFF block */}
             {!v.accOn && (
-              <div style={{ background: '#f9731613', border: '1px solid #f9731630', borderRadius: 8, padding: '8px 10px', marginTop: 7 }}>
-                <div style={{ color: '#f97316', fontSize: 12, fontWeight: 700 }}>🔑 Engine Stopped</div>
+              <div style={{ background: `${t.idleOnline}13`, border: `1px solid ${t.idleOnline}35`, borderRadius: 8, padding: '8px 10px', marginTop: 7 }}>
+                <div style={{ color: t.idleOnline, fontSize: 12, fontWeight: 700 }}>🔑 Engine Stopped</div>
                 {accOffDur && <div style={{ color: t.textSoft, fontSize: 12, marginTop: 2 }}>Stopped for: <b style={{ color: t.text }}>{accOffDur}</b></div>}
                 {hist.fuelAtAccOff != null && (
                   <div style={{ color: t.textSoft, fontSize: 12, marginTop: 2 }}>
@@ -3756,8 +3203,9 @@ function LiveWindowManager() {
 
 // ── Live Map view ──────────────────────────────────────────────────────────
 
-function LiveMapView() {
-  const { t } = useTheme();
+function LiveMapView({ fillHost = false, forceLightChrome = false }) {
+  const ctx = useTheme();
+  const t = forceLightChrome ? themes.light : ctx.t;
 
   // Own live data — fetched fresh every 15 s
   const [vehicles, setVehicles] = useState([]);
@@ -3797,6 +3245,17 @@ function LiveMapView() {
   const [rightOpen,     setRightOpen]     = useState(true);
   const [fullscreen,    setFullscreen]    = useState(false);
   const [activePopupId, setActivePopupId] = useState(null);
+  const [listSearch, setListSearch] = useState('');
+
+  const filteredListVehicles = useMemo(() => {
+    const q = listSearch.trim().toLowerCase();
+    if (!q) return vehicles;
+    return vehicles.filter(v => {
+      const plate = String(v.plate || v.nm || v.devIdno || '').toLowerCase();
+      const id = String(v.devIdno || '').toLowerCase();
+      return plate.includes(q) || id.includes(q);
+    });
+  }, [vehicles, listSearch]);
 
   // Keep setActivePopupId accessible from Leaflet event handlers
   setActivePopupIdRef.current = setActivePopupId;
@@ -3913,8 +3372,8 @@ function LiveMapView() {
 
     for (const v of valid) {
       const geo   = geoNames[v.devIdno] || null;
-      const icon  = buildMarkerIcon(v);
-      const popup = buildPopupHtml(v, geo);
+      const icon  = buildMarkerIcon(v, t);
+      const popup = buildPopupHtml(v, geo, t);
       if (markersRef.current[v.devIdno]) {
         markersRef.current[v.devIdno].setLatLng([v.lat, v.lng]);
         markersRef.current[v.devIdno].setIcon(icon);
@@ -3931,7 +3390,7 @@ function LiveMapView() {
       try { mapInstanceRef.current.fitBounds(L.latLngBounds(valid.map(v => [v.lat, v.lng])), { padding: [50, 50], maxZoom: 14 }); }
       catch {}
     }
-  }, [vehicles, geoNames]);
+  }, [vehicles, geoNames, t]);
 
   // Staggered reverse-geocoding
   useEffect(() => {
@@ -3968,10 +3427,14 @@ function LiveMapView() {
   const offlineCount = vehicles.filter(v => !v.online).length;
   const gpsCount     = vehicles.filter(v => v.lat != null && Math.abs(v.lat) > 0.001).length;
 
+  const hostStyle = fullscreen
+    ? { position: 'fixed', inset: 0, zIndex: 800, display: 'flex', gap: 0, background: '#000' }
+    : fillHost
+      ? { display: 'flex', gap: 0, width: '100%', flex: 1, minHeight: 0, height: '100%', position: 'relative' }
+      : { display: 'flex', gap: 0, width: '100%', height: 'calc(100vh - 180px)', minHeight: 500, position: 'relative' };
+
   return (
-    <div style={fullscreen
-      ? { position: 'fixed', inset: 0, zIndex: 800, display: 'flex', gap: 0, background: '#000' }
-      : { display: 'flex', gap: 0, width: '100%', height: 'calc(100vh - 180px)', minHeight: 500, position: 'relative' }}>
+    <div style={hostStyle}>
       {/* Map */}
       <div style={{ flex: 1, borderRadius: fullscreen ? 0 : (rightOpen ? '16px 0 0 16px' : 16), overflow: 'hidden', border: fullscreen ? 'none' : `1px solid ${t.border}`, boxShadow: fullscreen ? 'none' : '0 2px 12px rgba(0,0,0,0.08)', position: 'relative', transition: 'border-radius 0.2s' }}>
         <div ref={mapRef} style={{ width: '100%', height: '100%' }} />
@@ -4012,8 +3475,8 @@ function LiveMapView() {
           <div style={{ display: 'flex', gap: 8 }}>
             {[
               { label: 'ACC ON',  count: accOnCount,   color: t.green  },
-              { label: 'ACC OFF', count: accOffCount,  color: t.orange },
-              { label: 'Offline', count: offlineCount, color: t.red    },
+              { label: 'ACC OFF', count: accOffCount,  color: t.idleOnline },
+              { label: 'Offline', count: offlineCount, color: t.offlineDeep },
             ].map(({ label, count, color }) => (
               <div key={label} style={{ flex: 1, background: `${color}18`, border: `1px solid ${color}44`, borderRadius: 12, padding: '10px 8px', textAlign: 'center' }}>
                 <div style={{ fontWeight: 800, fontSize: 20, color }}>{count}</div>
@@ -4021,20 +3484,38 @@ function LiveMapView() {
               </div>
             ))}
           </div>
+          <input
+            type="search"
+            value={listSearch}
+            onChange={e => setListSearch(e.target.value)}
+            placeholder="Search plate or ID…"
+            style={{
+              width: '100%', boxSizing: 'border-box',
+              background: t.bgAlt, border: `1px solid ${t.border}`, borderRadius: 10,
+              padding: '9px 12px', color: t.text, fontSize: 13, fontFamily: 'inherit', outline: 'none',
+            }}
+          />
+          <div style={{ fontSize: 10, color: t.muted, textAlign: 'center', lineHeight: 1.35 }}>
+            Cyan = online, engine off · Green = ACC on · Deep red = offline
+          </div>
           {vehicles.length > 0 && gpsCount < vehicles.length && (
             <div style={{ fontSize: 11, color: t.muted, textAlign: 'center' }}>{gpsCount}/{vehicles.length} vehicles have GPS</div>
           )}
-          <Panel title={`FLEET LOCATIONS (${vehicles.length})`} style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+          <Panel title={`FLEET LOCATIONS (${listSearch.trim() ? `${filteredListVehicles.length} / ${vehicles.length}` : vehicles.length})`} style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
             <div style={{ overflowY: 'auto', flex: 1 }}>
               {loading && vehicles.length === 0
                 ? <div style={{ padding: 20, color: t.muted, fontSize: 13, textAlign: 'center' }}>Loading…</div>
                 : vehicles.length === 0
                   ? <Empty icon="🗺️" text="No vehicles found" />
-                  : vehicles.map(v => {
+                  : filteredListVehicles.length === 0
+                    ? <div style={{ padding: 20, color: t.muted, fontSize: 13, textAlign: 'center' }}>No vehicles match search</div>
+                    : filteredListVehicles.map(v => {
                       const geo      = geoNames[v.devIdno];
                       const hasGPS   = v.lat != null && Math.abs(v.lat) > 0.001;
                       const isOnline = v.online === 1 || v.online === 2;
-                      const statusColor = !v.online ? t.red : v.accOn ? t.green : t.orange;
+                      const statusColor = !v.online ? t.offlineDeep : v.accOn ? t.green : t.idleOnline;
+                      const ring = vehicleStatusRingColor(v, t);
+                      const iconSrc = vehicleFleetIconUrl(v);
                       return (
                         <div key={v.devIdno} style={{ borderBottom: `1px solid ${t.border}` }}>
                           <div
@@ -4044,10 +3525,17 @@ function LiveMapView() {
                             onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                               <div style={{ width: 9, height: 9, borderRadius: '50%', background: statusColor, flexShrink: 0, boxShadow: isOnline ? `0 0 6px ${statusColor}` : 'none' }} />
+                              <div style={{
+                                width: 32, height: 32, borderRadius: '50%', border: `2px solid ${ring}`,
+                                overflow: 'hidden', background: '#fff', flexShrink: 0,
+                                display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 1px 4px rgba(0,0,0,0.12)',
+                              }}>
+                                <img src={iconSrc} alt="" style={{ width: 28, height: 28, objectFit: 'contain' }} />
+                              </div>
                               <span style={{ fontWeight: 700, color: t.text, fontSize: 13, flex: 1 }}>{v.plate || v.devIdno}</span>
                               {v.speed > 0 && <span style={{ color: t.accent, fontSize: 11, fontWeight: 700 }}>{v.speed} km/h</span>}
                             </div>
-                            <div style={{ fontSize: 11, color: t.muted, marginTop: 3, paddingLeft: 17, lineHeight: 1.4 }}>
+                            <div style={{ fontSize: 11, color: t.muted, marginTop: 3, paddingLeft: 49, lineHeight: 1.4 }}>
                               {!hasGPS ? '⚠️ No GPS signal' : geo ? `📍 ${geo}` : '📍 Fetching…'}
                             </div>
                           </div>
@@ -4672,10 +4160,9 @@ function RoutesView({ vehicles }) {
 
 const NAV = [
   { id: "dashboard",   icon: "◈",  label: "Dashboard"     },
-  { id: "vehicles",    icon: "🚌", label: "Vehicles"      },
+  { id: "vehicles",    icon: "🚌", iconUrl: SEMI_TRAILER_ICON, label: "Vehicles"      },
   { id: "livemap",     icon: "📍", label: "Live Map"      },
   { id: "cameras",     icon: "📷", label: "Live Cameras"  },
-  { id: "erp",         icon: "🏢", label: "Fleet Settings"     },
   { id: "alarms",      icon: "⚡", label: "Alarms"        },
   { id: "notifs",      icon: "🔔", label: "Notifications" },
   { id: "fuel",        icon: "⛽", label: "Fuel Report"   },
@@ -4684,9 +4171,16 @@ const NAV = [
   { id: "chat",        icon: "🤖", label: "FleetBot AI"   },
 ];
 
-function FleetDashboardContent() {
+function FleetDashboardContent({ embedded = false, view: controlledView, onViewChange, filterDevIdnos } = {}) {
   const { t, theme, toggleTheme } = useTheme();
-  const [view,        setView]        = useState("dashboard");
+  const narrow = useBreakpoint(900);
+  const [internalView, setInternalView] = useState("dashboard");
+  const view = controlledView ?? internalView;
+  const setView = useCallback((next) => {
+    if (typeof onViewChange === "function") onViewChange(next);
+    else setInternalView(next);
+  }, [onViewChange]);
+
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [selectedVehicle, setSelectedVehicle] = useState(null);
   const [sideStreamVehicle, setSideStreamVehicle] = useState(null);
@@ -4814,25 +4308,45 @@ function FleetDashboardContent() {
   useEffect(() => { fetchVehicles(); }, [fetchVehicles]);
 
   useEffect(() => {
-    if (view === "vehicles" || view === "cameras" || view === "fuel" || view === "fuelrpt" || view === "erp" || view === "routemgr") fetchVehicles();
+    if (view === "vehicles" || view === "cameras" || view === "fuel" || view === "fuelrpt" || view === "routemgr") fetchVehicles();
     if (view === "alarms") fetchAlarms();
   }, [view, fetchVehicles, fetchAlarms]);
 
   const totals = snapshot?.totals || {};
 
-  // ERP context — filter vehicles by the active company
+  // Fleet filter — in embedded mode we optionally receive a list of devIdnos to show (company scope filter)
+  const filterSet = useMemo(() => {
+    if (!embedded || !Array.isArray(filterDevIdnos) || filterDevIdnos.length === 0) return null;
+    return new Set(filterDevIdnos.map(String));
+  }, [embedded, filterDevIdnos]);
+
+  // ERP context — legacy filtering by activeCompanyId (from /api/erp/summary)
   const activeCompany = erpSummary?.companies?.find(c => c.id === activeCompanyId) ?? null;
-  const filteredVehicles = (activeCompanyId && activeCompany)
-    ? vehicles.filter(v => activeCompany.vehicles.some(sv => sv.devIdno === v.devIdno))
-    : vehicles;
+
+  const filteredVehicles = filterSet
+    ? vehicles.filter(v => filterSet.has(String(v.devIdno)))
+    : ((activeCompanyId && activeCompany)
+        ? vehicles.filter(v => activeCompany.vehicles.some(sv => sv.devIdno === v.devIdno))
+        : vehicles);
   const filteredOnline  = filteredVehicles.filter(v => (v.online ?? 0) !== 0).length;
   const filteredOffline = filteredVehicles.filter(v => (v.online ?? 0) === 0).length;
 
-  return (
-    <div style={{ minHeight: "100vh", background: t.bg, color: t.text, fontFamily: "'DM Sans', 'Inter', system-ui, sans-serif" }}>
+  const contentLeft = embedded ? 0 : (sidebarOpen ? 240 : 52);
 
-      {/* ── Sidebar ── */}
-      <div style={{
+  return (
+    <div style={{
+      minHeight: embedded ? 0 : "100vh",
+      height: embedded ? "100%" : undefined,
+      flex: embedded ? 1 : undefined,
+      display: embedded ? "flex" : undefined,
+      flexDirection: embedded ? "column" : undefined,
+      background: t.bg,
+      color: t.text,
+      fontFamily: "'DM Sans', 'Inter', system-ui, sans-serif",
+    }}>
+
+      {/* ── Sidebar (legacy) ── */}
+      {!embedded && <div style={{
         position: "fixed", left: 0, top: 0, bottom: 0, width: sidebarOpen ? 240 : 52,
         background: t.sidebar,
         borderRight: `1px solid ${t.border}`,
@@ -4844,12 +4358,12 @@ function FleetDashboardContent() {
         {/* Logo */}
         <div style={{ padding: sidebarOpen ? "20px 20px 16px" : "14px 0", display: "flex", justifyContent: "center" }}>
           <div style={{ display: "flex", alignItems: "center", gap: sidebarOpen ? 14 : 0 }}>
-            <div style={{ borderRadius: 16, width: 64, height: 64, overflow: "hidden", flexShrink: 0, boxShadow: `0 6px 20px ${t.accentGlow}` }}>
-              <img src="/logo.png" alt="Helion" style={{ width: "100%", height: "100%", objectFit: "contain", mixBlendMode: theme === "dark" ? "screen" : "normal" }} />
+            <div style={{ borderRadius: 16, width: 88, height: 88, overflow: "hidden", flexShrink: 0, boxShadow: `0 6px 24px ${t.accentGlow}` }}>
+              <img src="/logo.png" alt="Helion" style={{ width: "100%", height: "100%", objectFit: "contain", padding: 4, mixBlendMode: theme === "dark" ? "screen" : "normal" }} />
             </div>
             {sidebarOpen && <div>
-              <div style={{ fontWeight: 800, fontSize: 22, color: t.text, letterSpacing: -0.5, lineHeight: 1.1 }}>HELION</div>
-              <div style={{ color: t.textSoft, fontSize: 13, fontWeight: 400, marginTop: 3 }}>Fleet Management</div>
+              <div style={{ fontWeight: 800, fontSize: 24, color: t.text, letterSpacing: -0.5, lineHeight: 1.1 }}>HELION</div>
+              <div style={{ color: t.textSoft, fontSize: 14, fontWeight: 400, marginTop: 3 }}>Fleet Management</div>
             </div>}
           </div>
         </div>
@@ -4934,7 +4448,13 @@ function FleetDashboardContent() {
                 onMouseEnter={e => { if (!active) { e.currentTarget.style.background = t.panelBright; e.currentTarget.style.color = t.text; } }}
                 onMouseLeave={e => { if (!active) { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = t.textSoft; } }}
               >
-                <span style={{ fontSize: 18, width: 22, textAlign: "center", opacity: active ? 1 : 0.7, flexShrink: 0 }}>{item.icon}</span>
+                {item.iconUrl ? (
+                  <span style={{ width: 28, height: 28, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, opacity: active ? 1 : 0.85 }}>
+                    <img src={item.iconUrl} alt="" style={{ width: 26, height: 26, objectFit: "contain" }} />
+                  </span>
+                ) : (
+                  <span style={{ fontSize: 18, width: 22, textAlign: "center", opacity: active ? 1 : 0.7, flexShrink: 0 }}>{item.icon}</span>
+                )}
                 {sidebarOpen && <span style={{ flex: 1 }}>{item.label}</span>}
                 {sidebarOpen && item.id === "alarms" && totals.alarming > 0 && (
                   <span style={{ background: t.red, color: "#fff", borderRadius: 20, padding: "1px 8px", fontSize: 10, fontWeight: 800 }}>{totals.alarming}</span>
@@ -4990,12 +4510,20 @@ function FleetDashboardContent() {
             {sidebarOpen ? "◀" : "▶"}
           </button>
         </div>
-      </div>
+      </div>}
 
       {/* ── Main Content ── */}
-      <div style={{ marginLeft: sidebarOpen ? 240 : 52, minHeight: "100vh", transition: "margin-left 0.2s" }}>
-        {/* Top bar */}
-        <div style={{
+      <div style={{
+        marginLeft: contentLeft,
+        minHeight: embedded ? 0 : "100vh",
+        height: embedded ? "100%" : undefined,
+        flex: embedded ? 1 : undefined,
+        display: embedded ? "flex" : undefined,
+        flexDirection: embedded ? "column" : undefined,
+        transition: embedded ? undefined : "margin-left 0.2s",
+      }}>
+        {/* Top bar (legacy) */}
+        {!embedded && <div style={{
           display: "flex", justifyContent: "space-between", alignItems: "center",
           padding: "20px 28px 0",
           marginBottom: 24,
@@ -5063,10 +4591,16 @@ function FleetDashboardContent() {
               )}
             </button>
           </div>
-        </div>
+        </div>}
 
         {/* Views */}
-        <div style={{ padding: view === "livemap" ? "0" : "0 28px 32px" }}>
+        <div style={{
+          padding: view === "livemap" ? "0" : narrow ? "0 12px 20px" : "0 28px 32px",
+          flex: embedded && view === "livemap" ? 1 : undefined,
+          minHeight: embedded && view === "livemap" ? 0 : undefined,
+          display: embedded && view === "livemap" ? "flex" : undefined,
+          flexDirection: embedded && view === "livemap" ? "column" : undefined,
+        }}>
           {view === "dashboard" && (
             snapLoading ? <Spinner label="Fetching live fleet data…" /> :
             snapError   ? <ErrorBanner message={snapError} onRetry={fetchSnapshot} /> :
@@ -5077,12 +4611,11 @@ function FleetDashboardContent() {
               onRetry={() => { vehiclesFetched.current = false; fetchVehicles(); }}
               onSelect={setSelectedVehicle} erpSummary={erpSummary} />
           )}
-          {view === "livemap"     && <LiveMapView />}
+          {view === "livemap"     && <LiveMapView fillHost={embedded} forceLightChrome={embedded} />}
           {view === "alarms" && (
             <AlarmsView alarms={alarms} loading={alarmLoading} error={alarmError}
               onRetry={() => { alarmsFetched.current = false; fetchAlarms(); }} />
           )}
-          {view === "erp"         && <FleetERPView vehicles={filteredVehicles} onCompanySelect={setActiveCompanyId} activeCompanyId={activeCompanyId} />}
           {view === "notifs"      && <NotificationsView events={accEvents} onClear={clearNotifications} />}
           {view === "cameras"     && <LiveCamerasView vehicles={filteredVehicles} erpSummary={erpSummary} />}
           {view === "fuel"        && <FuelConsumptionView vehicles={filteredVehicles} erpSummary={erpSummary} />}
@@ -5131,16 +4664,44 @@ function FleetDashboardContent() {
 }
 
 export default function FleetDashboard() {
-  const [theme, setTheme] = useState("dark");
+  const [theme, setTheme] = useState(() => {
+    try { return localStorage.getItem("fleetvu_theme") === "dark" ? "dark" : "light"; }
+    catch { return "light"; }
+  });
   const t = themes[theme] || themes.dark;
 
   const toggleTheme = useCallback(() => {
-    setTheme(p => p === "dark" ? "light" : "dark");
+    setTheme(p => {
+      const next = p === "dark" ? "light" : "dark";
+      try { localStorage.setItem("fleetvu_theme", next); } catch {}
+      return next;
+    });
   }, []);
 
   return (
     <ThemeContext.Provider value={{ theme, t, toggleTheme }}>
       <FleetDashboardContent />
+    </ThemeContext.Provider>
+  );
+}
+
+// Export embedded view for the new shell layout (theme controlled by FleetShell when props passed).
+export function FleetDashboardEmbedded({ view, onViewChange, filterDevIdnos, theme: parentTheme, onThemeChange }) {
+  const [internalTheme, setInternalTheme] = useState(() => {
+    try { return localStorage.getItem("fleetvu_theme") === "dark" ? "dark" : "light"; }
+    catch { return "light"; }
+  });
+  const theme = parentTheme !== undefined && parentTheme !== null ? parentTheme : internalTheme;
+  const toggleTheme = useCallback(() => {
+    const next = theme === "dark" ? "light" : "dark";
+    try { localStorage.setItem("fleetvu_theme", next); } catch {}
+    if (typeof onThemeChange === "function") onThemeChange(next);
+    else setInternalTheme(next);
+  }, [theme, onThemeChange]);
+  const t = themes[theme] || themes.light;
+  return (
+    <ThemeContext.Provider value={{ theme, t, toggleTheme }}>
+      <FleetDashboardContent embedded view={view} onViewChange={onViewChange} filterDevIdnos={filterDevIdnos} />
     </ThemeContext.Provider>
   );
 }

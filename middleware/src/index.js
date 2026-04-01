@@ -11,14 +11,22 @@ const auth       = require('./utils/auth');
 const fleetRoutes = require('./routes/index');
 const chatRoute   = require('./routes/chat');
 const eventsRoute    = require('./routes/events');
+const erp2Routes      = require('./routes/erp2');
+const authRoutes      = require('./routes/auth');
+const adminUsersRoutes= require('./routes/admin-users');
 const monitor        = require('./services/monitor.service');
 const hourlyReport   = require('./services/hourly-report.service');
 const path           = require('path');
+const fs             = require('fs');
 const http           = require('http');
+const users          = require('./services/users.service');
 
 const net  = require('net');
 const app  = express();
 const PORT = process.env.PORT || 3000;
+
+// ── Bootstrap default admin if empty user store ───────────────────────────
+try { users.ensureDefaultAdmin(); } catch (_) {}
 
 // ── Security & middleware ──────────────────────────────────────────────────
 app.use(helmet({
@@ -44,9 +52,8 @@ app.use(cors());
 app.use(express.json());
 app.use(morgan('combined', { stream: { write: (msg) => logger.info(msg.trim()) } }));
 
-// ── Serve Frontend ────────────────────────────────────────────────────────
+// ── Frontend dist path (static is registered after all /api routes below) ───
 const distPath = path.join(__dirname, '../../frontend/dist');
-app.use(express.static(distPath));
 
 // ── CMSV6 player proxy — serves the HTTP player page from our HTTPS origin ───
 // Rewrites all http://cmsHost URLs inside HTML/JS responses to go through
@@ -217,6 +224,19 @@ app.get('/api/tiles/:z/:x/:y', async (req, res) => {
   }
 });
 
+// Vehicle map icons (PNG/SVG in repo /ICONS — manifest for picker UI)
+const ICONS_ROOT = path.join(__dirname, '../../ICONS');
+app.get('/api/icons/manifest', (req, res) => {
+  try {
+    if (!fs.existsSync(ICONS_ROOT)) return res.json({ success: true, data: [] });
+    const files = fs.readdirSync(ICONS_ROOT).filter(f => /\.(png|jpe?g|svg|webp|gif)$/i.test(f));
+    return res.json({ success: true, data: files.sort((a, b) => a.localeCompare(b)) });
+  } catch (e) {
+    return res.status(500).json({ success: false, message: e.message });
+  }
+});
+app.use('/api/icons', express.static(ICONS_ROOT));
+
 // Rate limiter (API routes only — tiles are excluded above)
 app.use(rateLimit({
   windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 900000,
@@ -269,13 +289,30 @@ app.get('/health', (req, res) => {
   });
 });
 
+// ── Auth (JWT) (no API key required) ───────────────────────────────────────
+app.use('/api/auth', authRoutes);
+app.use('/api/admin/users', adminUsersRoutes);
+
 // ── Events SSE (auth via ?api_key= query param — EventSource can't set headers) ──
 app.use('/api/events', auth, eventsRoute);
 
 // ── API routes (all require API key) ─────────────────────────────────────
 app.use('/api', auth);
 app.use('/api', fleetRoutes);
+app.use('/api/erp2', erp2Routes);
 app.use('/api/chat', chatRoute);
+
+// ── Static assets + SPA (after all /api handlers) ──────────────────────────
+// Login background: explicit route so we never return index.html as "image" (breaks CSS url())
+app.get('/login.png', (req, res) => {
+  const p = path.join(distPath, 'login.png');
+  if (!fs.existsSync(p)) {
+    return res.status(404).type('text/plain').send('Add login.png to frontend/public then run npm run build');
+  }
+  res.type('image/png');
+  res.sendFile(p);
+});
+app.use(express.static(distPath));
 
 // ── SPA Fallback (serve index.html for unknown routes) ────────────────────
 app.get('*', (req, res) => {

@@ -1,0 +1,177 @@
+{
+  "org": {
+    "companies": [
+      {
+        "id": "cmp_mnev0mvt_428a3d88347c",
+        "name": "STARLINK GULF TRADING LTD",
+        "color": "#4318d1",
+        "phone": "",
+        "createdAt": "2026-03-31T16:57:08.057Z"
+      },
+      {
+        "id": "cmp_mnezawvx_51c5b5528ca7",
+        "name": "FIXTECH",
+        "color": "#4318d1",
+        "phone": "",
+        "createdAt": "2026-03-31T18:57:06.045Z"
+      }
+    ],
+    "branches": [
+      {
+        "id": "br_mneza6nx_787d39edfbaa",
+        "companyId": "cmp_mnev0mvt_428a3d88347c",
+        "name": "Semi-Trailer",
+        "createdAt": "2026-03-31T18:56:32.061Z"
+      },
+      {
+        "id": "br_mnezaj66_32f6a9837614",
+        "companyId": "cmp_mnev0mvt_428a3d88347c",
+        "name": "Excavator",
+        "createdAt": "2026-03-31T18:56:48.270Z"
+      },
+      {
+        "id": "br_mnezbiq4_88eef431c599",
+        "companyId": "cmp_mnezawvx_51c5b5528ca7",
+        "name": "Excavator",
+        "createdAt": "2026-03-31T18:57:34.348Z"
+      }
+    ],
+    "depots": []
+  },
+  "vehicles": [
+    {
+      "id": "veh_mnev500t_76e60eb9a848",
+      "provider": "cmsv6",
+      "providerKey": "aws:14682601265",
+      "devIdno": "14682601265",
+      "plate": "T245EHC",
+      "meta": {
+        "iconKey": "Bucket Excavator.png"
+      },
+      "createdAt": "2026-03-31T17:00:31.709Z"
+    },
+    {
+      "id": "veh_mnev93hn_488fa967c485",
+      "provider": "cmsv6",
+      "providerKey": "aws:14682601177",
+      "devIdno": "14682601177",
+      "plate": "T770EMX",
+      "meta": {
+        "iconKey": "Semi trailer.png"
+      },
+      "createdAt": "2026-03-31T17:03:42.827Z"
+    },
+    {
+      "id": "veh_mnev93ht_daa4067a15e7",
+      "provider": "cmsv6",
+      "providerKey": "aws:14682601266",
+      "devIdno": "14682601266",
+      "plate": "T407EBQ",
+      "meta": {
+        "iconKey": "Drilling Excavator.png"
+      },
+      "createdAt": "2026-03-31T17:03:42.833Z"
+    },
+    {
+      "id": "veh_mnev93i0_6b49479d23a7",
+      "provider": "cmsv6",
+      "providerKey": "aws:14682601263",
+      "devIdno": "14682601263",
+      "plate": "T406EBQ",
+      "meta": {
+        "iconKey": "Drilling Excavator.png"
+      },
+      "createdAt": "2026-03-31T17:03:42.840Z"
+    },
+    {
+      "id": "veh_mnev93i6_a7609b50f133",
+      "provider": "cmsv6",
+      "providerKey": "aws:14682601264",
+      "devIdno": "14682601264",
+      "plate": "T972EHX",
+      "meta": {
+        "iconKey": "Bucket Excavator.png"
+      },
+      "createdAt": "2026-03-31T17:03:42.846Z"
+    },
+    {
+      "id": "veh_mnev93ic_9c62d52c5192",
+      "provider": "cmsv6",
+      "providerKey": "aws:14682601267",
+      "devIdno": "14682601267",
+      "plate": "T162EHC",
+      "meta": {
+        "iconKey": "Bucket Excavator.png"
+      },
+      "createdAt": "2026-03-31T17:03:42.852Z"
+    },
+    {
+      "id": "veh_mnf13j8s_2a4b25d912b1",
+      "provider": "cmsv6",
+      "providerKey": "mfg:4452509521",
+      "devIdno": "4452509521",
+      "plate": "4452509521",
+      "meta": {
+        "source": "mfg",
+        "server": "http://39.100.229.38:8088",
+        "mfgVehicleId": 12667,
+        "iconKey": "Semi trailer.png"
+      },
+      "createdAt": "2026-03-31T19:47:21.004Z"
+    }
+  ],
+  "assignments": {
+    "veh_mnev500t_76e60eb9a848": {
+      "companyId": "cmp_mnezawvx_51c5b5528ca7",
+      "branchId": "br_mnezbiq4_88eef431c599",
+      "depotId": null,
+      "categoryId": null,
+      "assignedAt": "2026-04-01T16:12:27.213Z"
+    },
+    "veh_mnev93hn_488fa967c485": {
+      "companyId": "cmp_mnev0mvt_428a3d88347c",
+      "branchId": "br_mneza6nx_787d39edfbaa",
+      "depotId": null,
+      "categoryId": null,
+      "assignedAt": "2026-04-01T16:13:43.443Z"
+    },
+    "veh_mnev93ht_daa4067a15e7": {
+      "companyId": "cmp_mnezawvx_51c5b5528ca7",
+      "branchId": "br_mnezbiq4_88eef431c599",
+      "depotId": null,
+      "categoryId": null,
+      "assignedAt": "2026-04-01T16:13:50.104Z"
+    },
+    "veh_mnev93i0_6b49479d23a7": {
+      "companyId": "cmp_mnezawvx_51c5b5528ca7",
+      "branchId": "br_mnezbiq4_88eef431c599",
+      "depotId": null,
+      "categoryId": null,
+      "assignedAt": "2026-04-01T16:13:56.984Z"
+    },
+    "veh_mnev93i6_a7609b50f133": {
+      "companyId": "cmp_mnev0mvt_428a3d88347c",
+      "branchId": "br_mnezaj66_32f6a9837614",
+      "depotId": null,
+      "categoryId": null,
+      "assignedAt": "2026-04-01T16:14:06.139Z"
+    },
+    "veh_mnev93ic_9c62d52c5192": {
+      "companyId": "cmp_mnezawvx_51c5b5528ca7",
+      "branchId": "br_mnezbiq4_88eef431c599",
+      "depotId": null,
+      "categoryId": null,
+      "assignedAt": "2026-04-01T16:14:27.465Z"
+    },
+    "veh_mnf13j8s_2a4b25d912b1": {
+      "companyId": "cmp_mnev0mvt_428a3d88347c",
+      "branchId": "br_mneza6nx_787d39edfbaa",
+      "depotId": null,
+      "categoryId": null,
+      "assignedAt": "2026-04-01T16:14:48.750Z"
+    }
+  },
+  "categories": [],
+  "drivers": [],
+  "driverAssignments": {}
+}

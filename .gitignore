@@ -8,8 +8,9 @@ build/
 .gemini/
 server.txt
 Active Security Cloud Platform.txt
-{middleware/
 dashboard/
+data/monitor-state.json
+data/users.json
 frontend/dist/
 frontend/node_modules/
 middleware/node_modules/
