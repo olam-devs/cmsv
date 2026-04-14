@@ -49,7 +49,8 @@ app.use(helmet({
   },
 }));
 app.use(cors());
-app.use(express.json());
+// Default express.json limit is ~100kb — bulk CSV → JSON imports need more headroom
+app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || '20mb' }));
 app.use(morgan('combined', { stream: { write: (msg) => logger.info(msg.trim()) } }));
 
 // ── Frontend dist path (static is registered after all /api routes below) ───

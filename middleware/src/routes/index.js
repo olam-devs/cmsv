@@ -1496,21 +1496,74 @@ router.get('/erp/summary', async (req, res) => {
 const locSvc   = require('../services/locations.service');
 const routeDef = require('../services/routes-def.service');
 const tripSvc  = require('../services/trips.service');
+const locationPresets = require('../config/location-presets');
 
-// ── Locations ──────────────────────────────────────────────────────────────
+// ── Locations (presets + bulk before :id) ─────────────────────────────────
+router.get('/routemgr/location-presets', (req, res) =>
+  ok(res, {
+    defaultMinRadius: locationPresets.DEFAULT_MIN_RADIUS,
+    roles: locationPresets.ROLES,
+    icons: locationPresets.ICONS,
+  }));
+
+router.post('/routemgr/locations/import', (req, res) => {
+  try {
+    const { items } = req.body || {};
+    const r = locSvc.importLocations(items);
+    ok(res, r);
+  } catch (e) {
+    err(res, e.message || 'Import failed');
+  }
+});
+
+// Danger action: bulk delete by role (useful to undo a CSV import batch).
+router.post('/routemgr/locations/delete-by-role', (req, res) => {
+  try {
+    const { role } = req.body || {};
+    ok(res, locSvc.deleteLocationsByRole(role));
+  } catch (e) {
+    err(res, e.message || 'Delete failed');
+  }
+});
+
+router.patch('/routemgr/locations/bulk', (req, res) => {
+  try {
+    const { ids, iconKey, radius, color } = req.body || {};
+    ok(res, locSvc.bulkPatchLocation(ids, { iconKey, radius, color }));
+  } catch (e) {
+    err(res, e.message);
+  }
+});
+
 router.get('/routemgr/locations', (req, res) => ok(res, locSvc.listLocations()));
 
 router.post('/routemgr/locations', (req, res) => {
   try {
-    const { name, type = 'circle', lat, lng, radius, polygon, color } = req.body || {};
+    const b = req.body || {};
+    const {
+      name,
+      type = 'circle',
+      lat,
+      lng,
+      radius,
+      polygon,
+      color,
+      userName,
+      phone,
+      contactPerson,
+      role,
+      placeAddress,
+      iconKey,
+    } = b;
     const trimmed = name != null ? String(name).trim() : '';
     if (!trimmed) return err(res, 'name is required');
+    const meta = { userName, phone, contactPerson, role, placeAddress, iconKey };
     if (type === 'polygon') {
       if (!Array.isArray(polygon) || polygon.length < 3) return err(res, 'polygon must have at least 3 vertices');
-      ok(res, locSvc.createLocation({ name: trimmed, type: 'polygon', polygon, color }));
+      ok(res, locSvc.createLocation({ name: trimmed, type: 'polygon', polygon, color, ...meta }));
     } else {
       if (lat == null || lng == null) return err(res, 'name, lat, lng are required for circle locations');
-      ok(res, locSvc.createLocation({ name: trimmed, type: 'circle', lat, lng, radius, color }));
+      ok(res, locSvc.createLocation({ name: trimmed, type: 'circle', lat, lng, radius, color, ...meta }));
     }
   } catch (e) {
     err(res, e.message || 'Invalid location');

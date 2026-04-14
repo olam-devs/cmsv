@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { apiFetch, setToken } from "../api";
-import { useNavigate } from "react-router-dom";
 
 const ACCENT = "#34d399";
 const ACCENT_MID = "#4ade80";
@@ -18,7 +17,6 @@ const NEUTRAL_FIELD_BORDER = "rgba(15, 23, 42, 0.14)";
 const PLACEHOLDER_NEUTRAL = "rgba(71, 85, 105, 0.75)";
 
 export default function Login() {
-  const nav = useNavigate();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -32,7 +30,9 @@ export default function Login() {
     try {
       const data = await apiFetch("/auth/login", { method: "POST", body: { username, password } });
       setToken(data.token);
-      nav("/erp", { replace: true });
+      // Full navigation so the route guard always sees the new token (client-only nav can stay on /login visually).
+      const base = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
+      window.location.replace(`${base}/fleet`);
     } catch (e2) {
       setErr(e2.message || String(e2));
     } finally {

@@ -1,8 +1,12 @@
-const API_BASE = "/api";
+// Same-origin: leave VITE_API_BASE empty. Split deploy: e.g. VITE_API_BASE=https://api.example.com/api
+const API_BASE = String(import.meta.env.VITE_API_BASE ?? "")
+  .trim()
+  .replace(/\/$/, "") || "/api";
 
 // NOTE: Step 3 will replace this with real user auth (token/cookie).
 // For now keep API key header to avoid breaking existing middleware auth.
-const API_KEY = "hshfd24d7998476hfbvvhfbh";
+const API_KEY =
+  String(import.meta.env.VITE_API_KEY ?? "").trim() || "hshfd24d7998476hfbvvhfbh";
 
 const TOKEN_KEY = "fleetvu_token";
 
@@ -50,10 +54,22 @@ export async function apiFetch(path, opts = {}) {
       } catch {}
     }
     const text = await res.text();
+    const trimmed = text.trim();
+    if (trimmed && (/^<!DOCTYPE/i.test(trimmed) || /^<html/i.test(trimmed))) {
+      throw new Error(
+        `The server returned HTML instead of JSON (HTTP ${res.status} on ${API_BASE}${path}). ` +
+          "The API request likely did not reach the Node middleware (wrong host, missing /api proxy, or static hosting only).",
+      );
+    }
     let json = {};
     try {
       json = text ? JSON.parse(text) : {};
     } catch {
+      if (trimmed) {
+        throw new Error(
+          `Invalid JSON from API (HTTP ${res.status} on ${path}): ${text.slice(0, 160)}${text.length > 160 ? "…" : ""}`,
+        );
+      }
       json = {};
     }
     if (!res.ok || json.success === false) {

@@ -13,7 +13,7 @@ createRoot(document.getElementById("root")).render(
   <StrictMode>
     <BrowserRouter>
       <Routes>
-        <Route path="/" element={<Navigate to="/erp" replace />} />
+        <Route path="/" element={<Navigate to="/fleet" replace />} />
         <Route path="/login" element={<Login />} />
         <Route path="/erp" element={getToken() ? <ErrorBoundary><ErpShell /></ErrorBoundary> : <Navigate to="/login" replace />} />
         <Route path="/users" element={getToken() ? <ErrorBoundary><UsersPage /></ErrorBoundary> : <Navigate to="/login" replace />} />

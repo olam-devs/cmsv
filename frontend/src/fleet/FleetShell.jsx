@@ -17,6 +17,7 @@ const NAV = [
   { id: "notifs", icon: "🔔", label: "Notifications" },
   { id: "fuel", icon: "⛽", label: "Fuel Report" },
   { id: "fuelrpt", icon: "📅", label: "Daily/Monthly" },
+  { id: "locations", icon: "📌", label: "Locations" },
   { id: "routemgr", icon: "🗺️", label: "Route Tracker" },
   { id: "chat", icon: "🤖", label: "FleetBot AI" },
 ];
@@ -30,6 +31,7 @@ const VIEW_FEATURE = {
   notifs: "fleet.notifications",
   fuel: "fleet.fuel",
   fuelrpt: "fleet.reports",
+  locations: "fleet.routes",
   routemgr: "fleet.routes",
   chat: "fleet.chat",
 };

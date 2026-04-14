@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef, createContext, useContext, useMemo } from "react";
 import { useBreakpoint } from "./useBreakpoint.js";
+import { parseCSV, csvRowsToLocationItems, buildLocationTemplateCSV } from "./routeLocationUtils.js";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import "leaflet.markercluster/dist/MarkerCluster.css";
@@ -14,8 +15,13 @@ L.Icon.Default.mergeOptions({
 });
 
 // ── API Config ────────────────────────────────────────────────────────────────
-const API_BASE = "/api";
-const API_KEY  = "hshfd24d7998476hfbvvhfbh";
+// Same-origin: leave VITE_API_BASE empty (Vite proxies /api → middleware in dev).
+// Split deploy: set VITE_API_BASE in .env to full API root, e.g. https://your-host.com/api
+const API_BASE = String(import.meta.env.VITE_API_BASE ?? "")
+  .trim()
+  .replace(/\/$/, "") || "/api";
+const API_KEY =
+  String(import.meta.env.VITE_API_KEY ?? "").trim() || "hshfd24d7998476hfbvvhfbh";
 
 // ── Live stream window manager ────────────────────────────────────────────────
 // Each entry: { id, devIdno, plate, pos (0-8 or null), win }
@@ -65,10 +71,22 @@ function openLiveStream(vehicle) {
     .catch(() => { if (!win.closed) win.close(); });
 }
 
+function throwIfHtmlInsteadOfJson(path, status, text) {
+  const t = String(text || "").trim();
+  if (!t) return;
+  if (/^<!DOCTYPE/i.test(t) || /^<html/i.test(t)) {
+    throw new Error(
+      `The server returned a web page (HTML) instead of JSON (HTTP ${status} on ${API_BASE}${path}). ` +
+        "That usually means the request did not reach the Node middleware — for example the app is opened from static hosting " +
+        "without an /api proxy, or only the frontend was deployed. Run the stack so /api routes to the middleware, or open the app via the same origin that serves the API (e.g. http://localhost:3000 after npm run build).",
+    );
+  }
+}
+
 async function apiFetch(path, opts = {}) {
-  const { method = "GET", body, headers: extraHeaders } = opts;
+  const { method = "GET", body, headers: extraHeaders, timeoutMs = 20000 } = opts;
   const controller = new AbortController();
-  const tid = setTimeout(() => controller.abort(), 20000);
+  const tid = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch(`${API_BASE}${path}`, {
       method,
@@ -78,10 +96,23 @@ async function apiFetch(path, opts = {}) {
         ...(body ? { "Content-Type": "application/json" } : {}),
         ...extraHeaders,
       },
-      ...(body ? { body } : {}),
+      ...(body != null && body !== undefined
+        ? { body: typeof body === "string" || body instanceof Blob ? body : JSON.stringify(body) }
+        : {}),
     });
-    const json = await res.json();
-    if (!json.success) throw new Error(json.message || `API error on ${path}`);
+    const text = await res.text();
+    throwIfHtmlInsteadOfJson(path, res.status, text);
+    let json = {};
+    try {
+      json = text ? JSON.parse(text) : {};
+    } catch {
+      throw new Error(
+        `Invalid JSON from API (HTTP ${res.status} on ${path}): ${text.slice(0, 160)}${text.length > 160 ? "…" : ""}`,
+      );
+    }
+    if (!res.ok || json.success === false) {
+      throw new Error(json.message || json.error || `HTTP ${res.status} on ${path}`);
+    }
     return json.data;
   } finally {
     clearTimeout(tid);
@@ -3203,19 +3234,98 @@ function LiveWindowManager() {
 
 // ── Live Map view ──────────────────────────────────────────────────────────
 
+function escapeHtml(s) {
+  return String(s ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+/** Popup HTML for saved / managed locations (map markers). */
+function buildLocationPopupHtml(loc) {
+  const dash = (v) => {
+    const s = v != null ? String(v).trim() : "";
+    return s !== "" ? escapeHtml(s) : "—";
+  };
+  const lines = [
+    `<div style="min-width:240px;max-width:300px;font-size:13px;line-height:1.45;font-family:system-ui,sans-serif">`,
+    `<div style="font-weight:800;font-size:15px;margin-bottom:10px;color:#1e293b">${escapeHtml(loc.name)}</div>`,
+    `<div style="display:grid;gap:6px;margin-bottom:8px">`,
+    `<div><b style="color:#475569">Role</b><br><span style="color:#0f172a">${dash(loc.role)}</span></div>`,
+    `<div><b style="color:#475569">Contact person</b><br><span style="color:#0f172a">${dash(loc.contactPerson)}</span></div>`,
+    `<div><b style="color:#475569">Phone</b><br><span style="color:#0f172a">${dash(loc.phone)}</span></div>`,
+    `<div><b style="color:#475569">Place / address</b><br><span style="color:#0f172a">${dash(loc.placeAddress)}</span></div>`,
+    `</div>`,
+    `<div style="color:#64748b;font-size:11px;margin-top:6px;border-top:1px solid #e2e8f0;padding-top:6px">${
+      loc.lat != null && loc.lng != null
+        ? `${escapeHtml(loc.lat.toFixed(5))}, ${escapeHtml(loc.lng.toFixed(5))}`
+        : "—"
+    }</div>`,
+  ];
+  if (loc.type === "polygon")
+    lines.push(`<div style="font-size:11px;color:#64748b">⬡ Polygon · ${loc.polygon?.length || 0} vertices</div>`);
+  else lines.push(`<div style="font-size:11px;color:#64748b">📍 Circle · radius ${dash(loc.radius)} m</div>`);
+  lines.push(`</div>`);
+  return lines.join("");
+}
+
+function locEmoji(loc, icons) {
+  const id = loc?.iconKey || "pin";
+  const ic = (icons || []).find((x) => x.id === id);
+  return ic ? ic.emoji : "📍";
+}
+
+/** Tanzania with a thin outer margin only (no wide “neighbour country” framing). */
+function tzRegionBounds() {
+  return L.latLngBounds(L.latLng(-11.88, 29.22), L.latLng(-0.92, 40.48));
+}
+
+/** Most zoomed-out level: entire region fits in view — cannot zoom out further (avoids empty sea / rest of Africa). */
+function setLocationsMapMinZoomToRegion(map, region, padPx = 12) {
+  map.invalidateSize();
+  const z = map.getBoundsZoom(region, true, L.point(padPx, padPx));
+  if (!Number.isFinite(z)) return;
+  const clamped = Math.max(0, Math.min(z, 19));
+  map.setMinZoom(clamped);
+  if (map.getZoom() < clamped) map.setZoom(clamped);
+}
+
+function makeLocDivIcon(Lref, emoji) {
+  return Lref.divIcon({
+    className: "fleet-loc-leaflet-icon",
+    html: `<div style="font-size:20px;line-height:1;text-align:center;text-shadow:0 1px 3px rgba(0,0,0,.45)">${emoji}</div>`,
+    iconSize: [30, 34],
+    iconAnchor: [15, 34],
+    popupAnchor: [0, -30],
+  });
+}
+
 function LiveMapView({ fillHost = false, forceLightChrome = false }) {
   const ctx = useTheme();
   const t = forceLightChrome ? themes.light : ctx.t;
 
   // Own live data — fetched fresh every 15 s
   const [vehicles, setVehicles] = useState([]);
+  const [savedLocations, setSavedLocations] = useState([]);
+  const [locIconsForMap, setLocIconsForMap] = useState(() => [{ id: "pin", label: "Pin", emoji: "📍" }]);
+  const [locMapMinRadius, setLocMapMinRadius] = useState(200);
   const [loading,  setLoading]  = useState(true);
   const [error,    setError]    = useState(null);
 
   const fetchLive = useCallback(async () => {
     try {
-      const data = await apiFetch('/fleet/vehicles');
+      const [data, locs, pre] = await Promise.all([
+        apiFetch("/fleet/vehicles"),
+        apiFetch("/routemgr/locations").catch(() => []),
+        apiFetch("/routemgr/location-presets").catch(() => null),
+      ]);
       setVehicles(Array.isArray(data) ? data : []);
+      setSavedLocations(Array.isArray(locs) ? locs : []);
+      if (pre?.icons?.length) setLocIconsForMap(pre.icons);
+      if (pre?.defaultMinRadius != null && Number(pre.defaultMinRadius) > 0) {
+        setLocMapMinRadius(Number(pre.defaultMinRadius));
+      }
       setError(null);
     } catch (e) {
       setError(e.message);
@@ -3233,6 +3343,8 @@ function LiveMapView({ fillHost = false, forceLightChrome = false }) {
   const mapRef                = useRef(null);
   const mapInstanceRef        = useRef(null);
   const clusterRef            = useRef(null);
+  const locLayerRef           = useRef(null);
+  const locMarkersRef         = useRef({});
   const markersRef            = useRef({});
   const timerRefs             = useRef([]);
   const fittedRef             = useRef(false);
@@ -3246,6 +3358,8 @@ function LiveMapView({ fillHost = false, forceLightChrome = false }) {
   const [fullscreen,    setFullscreen]    = useState(false);
   const [activePopupId, setActivePopupId] = useState(null);
   const [listSearch, setListSearch] = useState('');
+  const [locListSearch, setLocListSearch] = useState('');
+  const [rightPanelFace, setRightPanelFace] = useState("vehicles"); // vehicles | locations
 
   const filteredListVehicles = useMemo(() => {
     const q = listSearch.trim().toLowerCase();
@@ -3256,6 +3370,22 @@ function LiveMapView({ fillHost = false, forceLightChrome = false }) {
       return plate.includes(q) || id.includes(q);
     });
   }, [vehicles, listSearch]);
+
+  const filteredSavedLocs = useMemo(() => {
+    const q = locListSearch.trim().toLowerCase();
+    const list = !q
+      ? savedLocations
+      : savedLocations.filter((loc) => {
+          const hay = [loc.name, loc.role, loc.placeAddress, loc.contactPerson, loc.phone]
+            .filter(Boolean)
+            .join(" ")
+            .toLowerCase();
+          return hay.includes(q);
+        });
+    return [...list].sort((a, b) =>
+      String(a.name || "").localeCompare(String(b.name || ""), undefined, { sensitivity: "base" }),
+    );
+  }, [savedLocations, locListSearch]);
 
   // Keep setActivePopupId accessible from Leaflet event handlers
   setActivePopupIdRef.current = setActivePopupId;
@@ -3329,6 +3459,17 @@ function LiveMapView({ fillHost = false, forceLightChrome = false }) {
     });
     map.addLayer(cluster);
     clusterRef.current = cluster;
+
+    if (!document.getElementById("fleet-loc-leaflet-style")) {
+      const st = document.createElement("style");
+      st.id = "fleet-loc-leaflet-style";
+      st.textContent =
+        ".fleet-loc-leaflet-icon{background:transparent!important;border:none!important;box-shadow:none!important}";
+      document.head.appendChild(st);
+    }
+    const locLayer = L.layerGroup().addTo(map);
+    locLayerRef.current = locLayer;
+
     mapInstanceRef.current = map;
 
     // Wire up stream button + detail panel on popup open
@@ -3354,10 +3495,68 @@ function LiveMapView({ fillHost = false, forceLightChrome = false }) {
       map.remove();
       mapInstanceRef.current = null;
       clusterRef.current = null;
+      locLayerRef.current = null;
+      Object.keys(locMarkersRef.current).forEach((k) => delete locMarkersRef.current[k]);
       Object.keys(markersRef.current).forEach(k => delete markersRef.current[k]);
       fittedRef.current = false;
     };
   }, []);
+
+  // Saved route-manager locations: circles, polygons, emoji markers + full info popups
+  useEffect(() => {
+    const locLayer = locLayerRef.current;
+    if (!locLayer || !L) return;
+    locLayer.clearLayers();
+    Object.keys(locMarkersRef.current).forEach((k) => delete locMarkersRef.current[k]);
+    const minR = locMapMinRadius;
+    for (const loc of savedLocations) {
+      const popupHtml = buildLocationPopupHtml(loc);
+      const isPoly =
+        loc.type === "polygon" && Array.isArray(loc.polygon) && loc.polygon.length >= 3;
+      const hasAnchor =
+        loc.lat != null && loc.lng != null && Math.abs(loc.lat) > 0.001;
+      let primaryForPopup = null;
+
+      if (isPoly) {
+        const col = loc.color || "#6366f1";
+        const poly = L.polygon(loc.polygon, {
+          color: col,
+          fillColor: col,
+          fillOpacity: 0.2,
+          weight: 2,
+        })
+          .bindTooltip(
+            `<b>${escapeHtml(loc.name)}</b><br>Polygon · ${loc.polygon.length} pts`,
+          )
+          .bindPopup(popupHtml)
+          .addTo(locLayer);
+        primaryForPopup = poly;
+      } else if (hasAnchor) {
+        const r = Math.max(Number(loc.radius) || minR, minR);
+        const col = loc.color || "#6366f1";
+        L.circle([loc.lat, loc.lng], {
+          radius: r,
+          color: col,
+          fillColor: col,
+          fillOpacity: 0.15,
+          weight: 2,
+        })
+          .bindTooltip(`<b>${escapeHtml(loc.name)}</b><br>r=${r}m`)
+          .bindPopup(popupHtml)
+          .addTo(locLayer);
+      }
+
+      if (hasAnchor) {
+        const em = locEmoji(loc, locIconsForMap);
+        const icon = makeLocDivIcon(L, em);
+        const m = L.marker([loc.lat, loc.lng], { icon }).bindPopup(popupHtml);
+        m.addTo(locLayer);
+        primaryForPopup = m;
+      }
+
+      if (primaryForPopup) locMarkersRef.current[loc.id] = primaryForPopup;
+    }
+  }, [savedLocations, locIconsForMap, locMapMinRadius]);
 
   // Place / update markers
   useEffect(() => {
@@ -3422,6 +3621,29 @@ function LiveMapView({ fillHost = false, forceLightChrome = false }) {
     markersRef.current[v.devIdno]?.openPopup();
   };
 
+  const focusSavedLocation = (loc) => {
+    const map = mapInstanceRef.current;
+    if (!map || !L) return;
+    const isPoly =
+      loc.type === "polygon" && Array.isArray(loc.polygon) && loc.polygon.length >= 3;
+    if (isPoly) {
+      try {
+        map.fitBounds(L.latLngBounds(loc.polygon), { padding: [48, 48], maxZoom: 16 });
+      } catch (_) {
+        if (loc.lat != null && loc.lng != null && Math.abs(loc.lat) > 0.001) {
+          map.setView([loc.lat, loc.lng], 16);
+        } else {
+          return;
+        }
+      }
+    } else if (loc.lat != null && loc.lng != null && Math.abs(loc.lat) > 0.001) {
+      map.setView([loc.lat, loc.lng], 16);
+    } else {
+      return;
+    }
+    locMarkersRef.current[loc.id]?.openPopup();
+  };
+
   const accOnCount   = vehicles.filter(v => v.online && v.accOn).length;
   const accOffCount  = vehicles.filter(v => v.online && !v.accOn).length;
   const offlineCount = vehicles.filter(v => !v.online).length;
@@ -3469,91 +3691,211 @@ function LiveMapView({ fillHost = false, forceLightChrome = false }) {
         )}
       </div>
 
-      {/* Right Sidebar */}
+      {/* Right Sidebar — coin flip between vehicles and saved locations */}
       {rightOpen && (
-        <div style={{ width: 300, display: 'flex', flexDirection: 'column', gap: 10, marginLeft: 8 }}>
-          <div style={{ display: 'flex', gap: 8 }}>
-            {[
-              { label: 'ACC ON',  count: accOnCount,   color: t.green  },
-              { label: 'ACC OFF', count: accOffCount,  color: t.idleOnline },
-              { label: 'Offline', count: offlineCount, color: t.offlineDeep },
-            ].map(({ label, count, color }) => (
-              <div key={label} style={{ flex: 1, background: `${color}18`, border: `1px solid ${color}44`, borderRadius: 12, padding: '10px 8px', textAlign: 'center' }}>
-                <div style={{ fontWeight: 800, fontSize: 20, color }}>{count}</div>
-                <div style={{ fontSize: 11, color: t.muted, fontWeight: 600 }}>{label}</div>
-              </div>
-            ))}
+        <div style={{
+          width: 300, marginLeft: 8, display: 'flex', flexDirection: 'column', gap: 10,
+          alignSelf: 'stretch', minHeight: 0, maxHeight: '100%',
+        }}>
+          <div style={{
+            display: 'flex', borderRadius: 12, overflow: 'hidden',
+            border: `1px solid ${t.border}`, background: t.bgAlt, boxShadow: '0 1px 0 rgba(0,0,0,0.04)',
+          }}>
+            <button
+              type="button"
+              onClick={() => setRightPanelFace("vehicles")}
+              aria-pressed={rightPanelFace === "vehicles"}
+              style={{
+                flex: 1, padding: '11px 8px', border: 'none', cursor: 'pointer', fontFamily: 'inherit',
+                fontWeight: 800, fontSize: 12, transition: 'background 0.35s ease, color 0.35s ease, transform 0.35s ease',
+                background: rightPanelFace === "vehicles" ? `linear-gradient(135deg, ${t.accent}, ${t.accentAlt})` : 'transparent',
+                color: rightPanelFace === "vehicles" ? '#fff' : t.textSoft,
+                transform: rightPanelFace === "vehicles" ? 'scale(1)' : 'scale(0.98)',
+              }}
+            >
+              🚌 Vehicles
+            </button>
+            <button
+              type="button"
+              onClick={() => setRightPanelFace("locations")}
+              aria-pressed={rightPanelFace === "locations"}
+              style={{
+                flex: 1, padding: '11px 8px', border: 'none', cursor: 'pointer', fontFamily: 'inherit',
+                fontWeight: 800, fontSize: 12, transition: 'background 0.35s ease, color 0.35s ease, transform 0.35s ease',
+                background: rightPanelFace === "locations" ? `linear-gradient(135deg, ${t.accent}, ${t.accentAlt})` : 'transparent',
+                color: rightPanelFace === "locations" ? '#fff' : t.textSoft,
+                transform: rightPanelFace === "locations" ? 'scale(1)' : 'scale(0.98)',
+              }}
+            >
+              📌 Locations
+            </button>
           </div>
-          <input
-            type="search"
-            value={listSearch}
-            onChange={e => setListSearch(e.target.value)}
-            placeholder="Search plate or ID…"
-            style={{
-              width: '100%', boxSizing: 'border-box',
-              background: t.bgAlt, border: `1px solid ${t.border}`, borderRadius: 10,
-              padding: '9px 12px', color: t.text, fontSize: 13, fontFamily: 'inherit', outline: 'none',
-            }}
-          />
-          <div style={{ fontSize: 10, color: t.muted, textAlign: 'center', lineHeight: 1.35 }}>
-            Cyan = online, engine off · Green = ACC on · Deep red = offline
-          </div>
-          {vehicles.length > 0 && gpsCount < vehicles.length && (
-            <div style={{ fontSize: 11, color: t.muted, textAlign: 'center' }}>{gpsCount}/{vehicles.length} vehicles have GPS</div>
-          )}
-          <Panel title={`FLEET LOCATIONS (${listSearch.trim() ? `${filteredListVehicles.length} / ${vehicles.length}` : vehicles.length})`} style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-            <div style={{ overflowY: 'auto', flex: 1 }}>
-              {loading && vehicles.length === 0
-                ? <div style={{ padding: 20, color: t.muted, fontSize: 13, textAlign: 'center' }}>Loading…</div>
-                : vehicles.length === 0
-                  ? <Empty icon="🗺️" text="No vehicles found" />
-                  : filteredListVehicles.length === 0
-                    ? <div style={{ padding: 20, color: t.muted, fontSize: 13, textAlign: 'center' }}>No vehicles match search</div>
-                    : filteredListVehicles.map(v => {
-                      const geo      = geoNames[v.devIdno];
-                      const hasGPS   = v.lat != null && Math.abs(v.lat) > 0.001;
-                      const isOnline = v.online === 1 || v.online === 2;
-                      const statusColor = !v.online ? t.offlineDeep : v.accOn ? t.green : t.idleOnline;
-                      const ring = vehicleStatusRingColor(v, t);
-                      const iconSrc = vehicleFleetIconUrl(v);
-                      return (
-                        <div key={v.devIdno} style={{ borderBottom: `1px solid ${t.border}` }}>
-                          <div
-                            onClick={() => focusVehicle(v)}
-                            style={{ padding: '10px 16px', cursor: hasGPS ? 'pointer' : 'default', transition: 'background 0.15s' }}
-                            onMouseEnter={e => { if (hasGPS) e.currentTarget.style.background = t.accentSoft; }}
-                            onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                              <div style={{ width: 9, height: 9, borderRadius: '50%', background: statusColor, flexShrink: 0, boxShadow: isOnline ? `0 0 6px ${statusColor}` : 'none' }} />
-                              <div style={{
-                                width: 32, height: 32, borderRadius: '50%', border: `2px solid ${ring}`,
-                                overflow: 'hidden', background: '#fff', flexShrink: 0,
-                                display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 1px 4px rgba(0,0,0,0.12)',
-                              }}>
-                                <img src={iconSrc} alt="" style={{ width: 28, height: 28, objectFit: 'contain' }} />
+
+          <div style={{ perspective: 1000, flex: 1, minHeight: 320, position: 'relative' }}>
+            <div style={{
+              width: '100%', height: '100%', minHeight: 320, position: 'relative',
+              transformStyle: 'preserve-3d',
+              transition: 'transform 0.65s cubic-bezier(0.34, 1.15, 0.64, 1)',
+              transform: rightPanelFace === "locations" ? 'rotateY(180deg)' : 'rotateY(0deg)',
+            }}>
+              {/* Front: vehicles */}
+              <div style={{
+                position: 'absolute', inset: 0, width: '100%', height: '100%',
+                backfaceVisibility: 'hidden', WebkitBackfaceVisibility: 'hidden',
+                transform: 'rotateY(0deg)',
+                display: 'flex', flexDirection: 'column', gap: 10, overflow: 'hidden',
+              }}>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  {[
+                    { label: 'ACC ON',  count: accOnCount,   color: t.green  },
+                    { label: 'ACC OFF', count: accOffCount,  color: t.idleOnline },
+                    { label: 'Offline', count: offlineCount, color: t.offlineDeep },
+                  ].map(({ label, count, color }) => (
+                    <div key={label} style={{ flex: 1, background: `${color}18`, border: `1px solid ${color}44`, borderRadius: 12, padding: '10px 8px', textAlign: 'center' }}>
+                      <div style={{ fontWeight: 800, fontSize: 20, color }}>{count}</div>
+                      <div style={{ fontSize: 11, color: t.muted, fontWeight: 600 }}>{label}</div>
+                    </div>
+                  ))}
+                </div>
+                <input
+                  type="search"
+                  value={listSearch}
+                  onChange={e => setListSearch(e.target.value)}
+                  placeholder="Search plate or ID…"
+                  style={{
+                    width: '100%', boxSizing: 'border-box',
+                    background: t.bgAlt, border: `1px solid ${t.border}`, borderRadius: 10,
+                    padding: '9px 12px', color: t.text, fontSize: 13, fontFamily: 'inherit', outline: 'none',
+                  }}
+                />
+                <div style={{ fontSize: 10, color: t.muted, textAlign: 'center', lineHeight: 1.35 }}>
+                  Cyan = online, engine off · Green = ACC on · Deep red = offline
+                </div>
+                {vehicles.length > 0 && gpsCount < vehicles.length && (
+                  <div style={{ fontSize: 11, color: t.muted, textAlign: 'center' }}>{gpsCount}/{vehicles.length} vehicles have GPS</div>
+                )}
+                <Panel title={`FLEET (${listSearch.trim() ? `${filteredListVehicles.length} / ${vehicles.length}` : vehicles.length})`} style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+                  <div style={{ overflowY: 'auto', flex: 1, minHeight: 0 }}>
+                    {loading && vehicles.length === 0
+                      ? <div style={{ padding: 20, color: t.muted, fontSize: 13, textAlign: 'center' }}>Loading…</div>
+                      : vehicles.length === 0
+                        ? <Empty icon="🗺️" text="No vehicles found" />
+                        : filteredListVehicles.length === 0
+                          ? <div style={{ padding: 20, color: t.muted, fontSize: 13, textAlign: 'center' }}>No vehicles match search</div>
+                          : filteredListVehicles.map(v => {
+                            const geo      = geoNames[v.devIdno];
+                            const hasGPS   = v.lat != null && Math.abs(v.lat) > 0.001;
+                            const isOnline = v.online === 1 || v.online === 2;
+                            const statusColor = !v.online ? t.offlineDeep : v.accOn ? t.green : t.idleOnline;
+                            const ring = vehicleStatusRingColor(v, t);
+                            const iconSrc = vehicleFleetIconUrl(v);
+                            return (
+                              <div key={v.devIdno} style={{ borderBottom: `1px solid ${t.border}` }}>
+                                <div
+                                  onClick={() => focusVehicle(v)}
+                                  style={{ padding: '10px 16px', cursor: hasGPS ? 'pointer' : 'default', transition: 'background 0.15s' }}
+                                  onMouseEnter={e => { if (hasGPS) e.currentTarget.style.background = t.accentSoft; }}
+                                  onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                    <div style={{ width: 9, height: 9, borderRadius: '50%', background: statusColor, flexShrink: 0, boxShadow: isOnline ? `0 0 6px ${statusColor}` : 'none' }} />
+                                    <div style={{
+                                      width: 32, height: 32, borderRadius: '50%', border: `2px solid ${ring}`,
+                                      overflow: 'hidden', background: '#fff', flexShrink: 0,
+                                      display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 1px 4px rgba(0,0,0,0.12)',
+                                    }}>
+                                      <img src={iconSrc} alt="" style={{ width: 28, height: 28, objectFit: 'contain' }} />
+                                    </div>
+                                    <span style={{ fontWeight: 700, color: t.text, fontSize: 13, flex: 1 }}>{v.plate || v.devIdno}</span>
+                                    {v.speed > 0 && <span style={{ color: t.accent, fontSize: 11, fontWeight: 700 }}>{v.speed} km/h</span>}
+                                  </div>
+                                  <div style={{ fontSize: 11, color: t.muted, marginTop: 3, paddingLeft: 49, lineHeight: 1.4 }}>
+                                    {!hasGPS ? '⚠️ No GPS signal' : geo ? `📍 ${geo}` : '📍 Fetching…'}
+                                  </div>
+                                </div>
+                                {isOnline && (
+                                  <div style={{ padding: '0 16px 10px 16px' }}>
+                                    <button
+                                      type="button"
+                                      onClick={() => openStreamRef.current?.(v.devIdno)}
+                                      style={{ width: '100%', padding: '6px 0', background: '#6366f122', border: '1px solid #6366f155', borderRadius: 8, color: '#818cf8', cursor: 'pointer', fontSize: 12, fontWeight: 700, fontFamily: 'inherit' }}>
+                                      📷 Live Cameras
+                                    </button>
+                                  </div>
+                                )}
                               </div>
-                              <span style={{ fontWeight: 700, color: t.text, fontSize: 13, flex: 1 }}>{v.plate || v.devIdno}</span>
-                              {v.speed > 0 && <span style={{ color: t.accent, fontSize: 11, fontWeight: 700 }}>{v.speed} km/h</span>}
-                            </div>
-                            <div style={{ fontSize: 11, color: t.muted, marginTop: 3, paddingLeft: 49, lineHeight: 1.4 }}>
-                              {!hasGPS ? '⚠️ No GPS signal' : geo ? `📍 ${geo}` : '📍 Fetching…'}
-                            </div>
-                          </div>
-                          {isOnline && (
-                            <div style={{ padding: '0 16px 10px 16px' }}>
-                              <button
-                                onClick={() => openStreamRef.current?.(v.devIdno)}
-                                style={{ width: '100%', padding: '6px 0', background: '#6366f122', border: '1px solid #6366f155', borderRadius: 8, color: '#818cf8', cursor: 'pointer', fontSize: 12, fontWeight: 700, fontFamily: 'inherit' }}>
-                                📷 Live Cameras
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })
-              }
+                            );
+                          })
+                    }
+                  </div>
+                </Panel>
+              </div>
+
+              {/* Back: saved locations */}
+              <div style={{
+                position: 'absolute', inset: 0, width: '100%', height: '100%',
+                backfaceVisibility: 'hidden', WebkitBackfaceVisibility: 'hidden',
+                transform: 'rotateY(180deg)',
+                display: 'flex', flexDirection: 'column', gap: 10, overflow: 'hidden',
+              }}>
+                <div style={{ fontSize: 11, color: t.muted, fontWeight: 600, textAlign: 'center', lineHeight: 1.4 }}>
+                  Tap the map marker or a row to open the location card (role, contact, phone, address).
+                </div>
+                <input
+                  type="search"
+                  value={locListSearch}
+                  onChange={(e) => setLocListSearch(e.target.value)}
+                  placeholder="Search site / depot…"
+                  style={{
+                    width: '100%', boxSizing: 'border-box',
+                    background: t.bgAlt, border: `1px solid ${t.border}`, borderRadius: 10,
+                    padding: '9px 12px', color: t.text, fontSize: 13, fontFamily: 'inherit', outline: 'none',
+                  }}
+                />
+                <Panel title={`SAVED LOCATIONS (${locListSearch.trim() ? `${filteredSavedLocs.length} / ${savedLocations.length}` : savedLocations.length})`} style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+                  <div style={{ overflowY: 'auto', flex: 1, minHeight: 0 }}>
+                    {savedLocations.length === 0 ? (
+                      <div style={{ padding: 16, fontSize: 12, color: t.muted, textAlign: 'center' }}>No saved locations · add them under Fleet → Locations</div>
+                    ) : filteredSavedLocs.length === 0 ? (
+                      <div style={{ padding: 16, fontSize: 12, color: t.muted, textAlign: 'center' }}>No locations match</div>
+                    ) : (
+                      filteredSavedLocs.map((loc, idx) => {
+                        const hasPolyMap =
+                          loc.type === "polygon" && Array.isArray(loc.polygon) && loc.polygon.length >= 3;
+                        const hasPt =
+                          hasPolyMap ||
+                          (loc.lat != null && loc.lng != null && Math.abs(loc.lat) > 0.001);
+                        const em = locEmoji(loc, locIconsForMap);
+                        const nameU = String(loc.name || "").toUpperCase();
+                        const roleU = loc.role ? String(loc.role).toUpperCase() : "";
+                        return (
+                          <button
+                            key={loc.id}
+                            type="button"
+                            onClick={() => hasPt && focusSavedLocation(loc)}
+                            disabled={!hasPt}
+                            style={{
+                              width: '100%', display: 'flex', alignItems: 'flex-start', gap: 8, textAlign: 'left',
+                              padding: '10px 12px', border: 'none', borderBottom: `1px solid ${t.border}`,
+                              background: 'transparent', cursor: hasPt ? 'pointer' : 'default', fontFamily: 'inherit',
+                              opacity: hasPt ? 1 : 0.55,
+                            }}
+                          >
+                            <span style={{ fontSize: 11, fontWeight: 800, color: t.muted, width: 22, flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>{idx + 1}.</span>
+                            <span style={{ fontSize: 16, lineHeight: 1.2, flexShrink: 0 }}>{em}</span>
+                            <span style={{ flex: 1, minWidth: 0 }}>
+                              <span style={{ display: 'block', fontWeight: 700, fontSize: 12, color: t.text, letterSpacing: 0.4 }}>{nameU}</span>
+                              {roleU && <span style={{ fontSize: 10, color: t.muted, display: 'block', letterSpacing: 0.3 }}>{roleU}</span>}
+                              {!hasPt && <span style={{ fontSize: 10, color: t.orange }}>No map geometry</span>}
+                            </span>
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
+                </Panel>
+              </div>
             </div>
-          </Panel>
+          </div>
         </div>
       )}
 
@@ -3583,23 +3925,35 @@ function LiveMapView({ fillHost = false, forceLightChrome = false }) {
   );
 }
 
-function RoutesView({ vehicles }) {
+const FALLBACK_LOC_PRESETS = {
+  defaultMinRadius: 200,
+  roles: ["Distributor", "Warehouse", "Office", "Other"],
+  icons: [{ id: "pin", label: "Pin", emoji: "📍" }],
+};
+
+/** Map, CSV import, bulk edit — sidebar "Locations". */
+function LocationsPageView({ embedded = false } = {}) {
   const { t } = useTheme();
-  const [tab, setTab] = useState('locations');
-
-  // Shared data
-  const [locations,   setLocations]   = useState([]);
-  const [routes,      setRoutes]      = useState([]);
-  const [trips,       setTrips]       = useState([]);
-  const [rankings,    setRankings]    = useState([]);
-  const [leaderboard, setLeaderboard] = useState([]);
-  const [selectedRouteId, setSelectedRouteId] = useState('');
-  const [loading,  setLoading]  = useState(false);
-  const [error,    setError]    = useState(null);
-
-  // Modals
-  const [locModal,   setLocModal]   = useState(null);
-  const [routeModal, setRouteModal] = useState(null);
+  const narrow = useBreakpoint(900);
+  const [locations, setLocations] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [deleteNote, setDeleteNote] = useState(null);
+  const [locModal, setLocModal] = useState(null);
+  const [locPresets, setLocPresets] = useState(FALLBACK_LOC_PRESETS);
+  const [selectedLocIds, setSelectedLocIds] = useState(() => new Set());
+  const importLocInputRef = useRef(null);
+  const [bulkIconKey, setBulkIconKey] = useState("");
+  const [bulkColor, setBulkColor] = useState("");
+  const [bulkRadius, setBulkRadius] = useState("");
+  const [locImportReport, setLocImportReport] = useState(null);
+  const [locPanelSearch, setLocPanelSearch] = useState("");
+  const [locRoleFilter, setLocRoleFilter] = useState("");
+  const [locTypeFilter, setLocTypeFilter] = useState("all"); // all | circle | polygon
+  const [highlightedLocId, setHighlightedLocId] = useState(null);
+  const locMarkersRef = useRef({});
+  const setHighlightRef = useRef(setHighlightedLocId);
+  setHighlightRef.current = setHighlightedLocId;
 
   // Polygon drawing state
   const [drawMode,      setDrawMode]      = useState('circle'); // 'circle' | 'polygon'
@@ -3617,96 +3971,173 @@ function RoutesView({ vehicles }) {
   const mapInstanceRef = useRef(null);
 
   // ── Data loaders ────────────────────────────────────────────────────────
-  const loadAll = async () => {
-    setLoading(true); setError(null);
+  const loadLocations = async () => {
+    setLoading(true);
+    setError(null);
     try {
-      const [locs, rts] = await Promise.all([
-        apiFetch('/routemgr/locations'),
-        apiFetch('/routemgr/routes'),
+      const [locs, pre] = await Promise.all([
+        apiFetch("/routemgr/locations"),
+        apiFetch("/routemgr/location-presets").catch(() => null),
       ]);
-      setLocations(locs); setRoutes(rts);
-    } catch (e) { setError(e.message); }
+      setLocations(locs);
+      if (pre && pre.roles && pre.icons) setLocPresets(pre);
+    } catch (e) {
+      setError(e.message);
+    }
     setLoading(false);
   };
 
-  const loadRankings = async (routeId) => {
-    if (!routeId) return;
-    try {
-      const [rnk, tps] = await Promise.all([
-        apiFetch(`/routemgr/rankings/${routeId}`),
-        apiFetch(`/routemgr/trips?routeId=${routeId}&limit=50`),
-      ]);
-      setRankings(rnk); setTrips(tps);
-    } catch (e) { setError(e.message); }
-  };
+  useEffect(() => {
+    loadLocations();
+  }, []);
 
-  const loadLeaderboard = async () => {
-    try { setLeaderboard(await apiFetch('/routemgr/leaderboard')); }
-    catch (e) { setError(e.message); }
-  };
+  const roleOptions = useMemo(() => {
+    const s = new Set(locPresets.roles || []);
+    for (const l of locations) {
+      if (l.role) s.add(l.role);
+    }
+    return [...s].sort();
+  }, [locations, locPresets.roles]);
 
-  useEffect(() => { loadAll(); }, []);
-  useEffect(() => { if (tab === 'leaderboard') loadLeaderboard(); }, [tab]);
-  useEffect(() => { loadRankings(selectedRouteId); }, [selectedRouteId]);
+  const filteredLocs = useMemo(() => {
+    let list = locations;
+    const q = locPanelSearch.trim().toLowerCase();
+    if (q) {
+      list = list.filter((l) => {
+        const hay = [l.name, l.role, l.placeAddress, l.contactPerson, l.phone]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        return hay.includes(q);
+      });
+    }
+    if (locRoleFilter) list = list.filter((l) => (l.role || "") === locRoleFilter);
+    if (locTypeFilter === "circle") list = list.filter((l) => l.type !== "polygon");
+    if (locTypeFilter === "polygon") list = list.filter((l) => l.type === "polygon");
+    return list;
+  }, [locations, locPanelSearch, locRoleFilter, locTypeFilter]);
+
+  const focusLocationOnMap = useCallback((loc) => {
+    if (loc.lat == null || loc.lng == null || Math.abs(loc.lat) < 0.001) return;
+    setHighlightedLocId(loc.id);
+    const map = mapInstanceRef.current;
+    const m = locMarkersRef.current[loc.id];
+    if (map && m) {
+      map.setView([loc.lat, loc.lng], 16);
+      m.openPopup();
+    }
+  }, []);
 
   // ── Leaflet map init ─────────────────────────────────────────────────────
   useEffect(() => {
-    if (tab !== 'locations' || !mapRef.current || !L) return;
-    if (mapInstanceRef.current) { mapInstanceRef.current.remove(); mapInstanceRef.current = null; }
+    if (!mapRef.current || !L) return;
+    if (mapInstanceRef.current) {
+      mapInstanceRef.current.remove();
+      mapInstanceRef.current = null;
+    }
+    locMarkersRef.current = {};
 
-    const map = L.map(mapRef.current, { center: [-6.8, 39.28], zoom: 12 });
+    if (!document.getElementById("fleet-loc-leaflet-style")) {
+      const st = document.createElement("style");
+      st.id = "fleet-loc-leaflet-style";
+      st.textContent =
+        ".fleet-loc-leaflet-icon{background:transparent!important;border:none!important;box-shadow:none!important}";
+      document.head.appendChild(st);
+    }
+
+    const region = tzRegionBounds();
+    const map = L.map(mapRef.current, {
+      center: region.getCenter(),
+      zoom: 7,
+      maxBounds: region,
+      maxBoundsViscosity: 1,
+    });
     L.tileLayer(`${API_BASE}/tiles/{z}/{x}/{y}`, {
       attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
       maxZoom: 19,
     }).addTo(map);
 
-    map.on('click', e => {
+    const minR = locPresets.defaultMinRadius || 200;
+
+    map.on("click", (e) => {
       const lat = Math.round(e.latlng.lat * 1000000) / 1000000;
       const lng = Math.round(e.latlng.lng * 1000000) / 1000000;
-      if (drawModeRef.current === 'polygon') {
-        // Add polygon vertex
-        setPolyVertices(prev => [...prev, [lat, lng]]);
+      if (drawModeRef.current === "polygon") {
+        setPolyVertices((prev) => [...prev, [lat, lng]]);
       } else {
-        // Circle mode: open create modal
-        setLocModal({ name: '', type: 'circle', lat, lng, radius: 200, color: ROUTE_COLORS[locations.length % ROUTE_COLORS.length] });
+        setLocModal({
+          name: "",
+          type: "circle",
+          lat,
+          lng,
+          radius: minR,
+          color: ROUTE_COLORS[locations.length % ROUTE_COLORS.length],
+          phone: "",
+          contactPerson: "",
+          role: "",
+          placeAddress: "",
+          iconKey: "pin",
+        });
       }
     });
 
-    // Draw saved locations
     for (const loc of locations) {
-      if (loc.type === 'polygon' && Array.isArray(loc.polygon) && loc.polygon.length >= 3) {
-        L.polygon(loc.polygon, { color: loc.color, fillColor: loc.color, fillOpacity: 0.18, weight: 2 })
-          .bindTooltip(`<b>${loc.name}</b><br>Polygon · ${loc.polygon.length} pts`)
+      const em = locEmoji(loc, locPresets.icons);
+      const icon = makeLocDivIcon(L, em);
+      const popupHtml = buildLocationPopupHtml(loc);
+      if (loc.type === "polygon" && Array.isArray(loc.polygon) && loc.polygon.length >= 3) {
+        const poly = L.polygon(loc.polygon, { color: loc.color, fillColor: loc.color, fillOpacity: 0.18, weight: 2 })
+          .bindTooltip(`<b>${escapeHtml(loc.name)}</b><br>Polygon · ${loc.polygon.length} pts`)
+          .bindPopup(popupHtml)
           .addTo(map);
-        // Centroid marker
-        L.circleMarker([loc.lat, loc.lng], { radius: 6, color: loc.color, fillColor: loc.color, fillOpacity: 1 })
-          .bindPopup(`<b>${loc.name}</b><br>Polygon area`)
-          .addTo(map);
+        poly.on("popupopen", () => setHighlightRef.current?.(loc.id));
+        const mk = L.marker([loc.lat, loc.lng], { icon }).bindPopup(popupHtml).addTo(map);
+        mk.on("popupopen", () => setHighlightRef.current?.(loc.id));
+        locMarkersRef.current[loc.id] = mk;
       } else {
-        L.circle([loc.lat, loc.lng], { radius: loc.radius || 200, color: loc.color, fillColor: loc.color, fillOpacity: 0.15, weight: 2 })
-          .bindTooltip(`<b>${loc.name}</b><br>r=${loc.radius}m`)
+        const r = Math.max(Number(loc.radius) || minR, minR);
+        const circ = L.circle([loc.lat, loc.lng], { radius: r, color: loc.color, fillColor: loc.color, fillOpacity: 0.15, weight: 2 })
+          .bindTooltip(`<b>${escapeHtml(loc.name)}</b><br>r=${r}m`)
+          .bindPopup(popupHtml)
           .addTo(map);
-        L.circleMarker([loc.lat, loc.lng], { radius: 7, color: loc.color, fillColor: loc.color, fillOpacity: 1 })
-          .bindPopup(`<b>${loc.name}</b><br>${loc.lat?.toFixed(5)}, ${loc.lng?.toFixed(5)}<br>Radius: ${loc.radius}m`)
-          .addTo(map);
+        circ.on("popupopen", () => setHighlightRef.current?.(loc.id));
+        const mk = L.marker([loc.lat, loc.lng], { icon }).bindPopup(popupHtml).addTo(map);
+        mk.on("popupopen", () => setHighlightRef.current?.(loc.id));
+        locMarkersRef.current[loc.id] = mk;
       }
     }
 
     if (locations.length > 0) {
-      const latLngs = locations.flatMap(l =>
-        l.type === 'polygon' ? l.polygon : [[l.lat, l.lng]]
-      );
-      try { map.fitBounds(L.latLngBounds(latLngs), { padding: [30, 30] }); } catch (_) {}
+      const latLngs = locations.flatMap((l) => (l.type === "polygon" ? l.polygon : [[l.lat, l.lng]]));
+      try {
+        const b = L.latLngBounds(latLngs);
+        if (b.isValid()) map.fitBounds(b, { padding: [28, 28], maxZoom: 16 });
+      } catch (_) {}
+    } else {
+      try {
+        map.fitBounds(region, { padding: [14, 14] });
+      } catch (_) {}
     }
 
+    setLocationsMapMinZoomToRegion(map, region, 12);
     mapInstanceRef.current = map;
+    const mapEl = mapRef.current;
+    const ro =
+      typeof ResizeObserver !== "undefined" && mapEl
+        ? new ResizeObserver(() => {
+            setLocationsMapMinZoomToRegion(map, region, 12);
+          })
+        : null;
+    if (ro && mapEl) ro.observe(mapEl);
     return () => {
+      if (ro && mapEl) ro.unobserve(mapEl);
+      ro?.disconnect();
       previewLayerRef.current = null;
       vertexMarkersRef.current = [];
       map.remove();
       mapInstanceRef.current = null;
     };
-  }, [tab, locations]);
+  }, [locations, locPresets]);
 
   // ── Polygon preview layer (updates without recreating map) ────────────────
   useEffect(() => {
@@ -3740,98 +4171,470 @@ function RoutesView({ vehicles }) {
 
   // ── CRUD handlers ────────────────────────────────────────────────────────
   const saveLocation = async () => {
-    const { id, name, type, lat, lng, radius, polygon, color } = locModal;
+    const {
+      id,
+      name,
+      type,
+      lat,
+      lng,
+      radius,
+      polygon,
+      color,
+      phone,
+      contactPerson,
+      role,
+      placeAddress,
+      iconKey,
+    } = locModal;
     if (!name.trim()) return;
-    const body = type === 'polygon'
-      ? { name, type: 'polygon', polygon, color }
-      : { name, type: 'circle', lat, lng, radius, color };
+    const meta = { phone, contactPerson, role, placeAddress, iconKey };
+    const body =
+      type === "polygon"
+        ? { name, type: "polygon", polygon, color, ...meta }
+        : { name, type: "circle", lat, lng, radius, color, ...meta };
     try {
-      if (id) await apiFetch(`/routemgr/locations/${id}`, { method: 'PUT', body: JSON.stringify(body) });
-      else    await apiFetch('/routemgr/locations',        { method: 'POST', body: JSON.stringify(body) });
-      setLocModal(null); loadAll();
-    } catch (e) { alert(e.message); }
+      if (id) await apiFetch(`/routemgr/locations/${id}`, { method: "PUT", body });
+      else await apiFetch("/routemgr/locations", { method: "POST", body });
+      setLocModal(null);
+      loadLocations();
+    } catch (e) {
+      alert(e.message);
+    }
   };
 
-  // Finish drawing polygon → open name modal
   const finishPolygon = () => {
     if (polyVertices.length < 3) return;
-    setLocModal({ name: '', type: 'polygon', polygon: polyVertices, color: ROUTE_COLORS[locations.length % ROUTE_COLORS.length] });
+    setLocModal({
+      name: "",
+      type: "polygon",
+      polygon: polyVertices,
+      color: ROUTE_COLORS[locations.length % ROUTE_COLORS.length],
+      phone: "",
+      contactPerson: "",
+      role: "",
+      placeAddress: "",
+      iconKey: "pin",
+    });
     setPolyVertices([]);
-    setDrawMode('circle');
+    setDrawMode("circle");
+  };
+
+  const downloadLocTemplate = () => {
+    const csv = buildLocationTemplateCSV(locPresets);
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "locations_template.csv";
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
+
+  const removeRetailers = async () => {
+    if (!confirm('Remove ALL locations where role = "retailer"? This cannot be undone.')) return;
+    setDeleteNote(null);
+    try {
+      const res = await apiFetch("/routemgr/locations/delete-by-role", {
+        method: "POST",
+        body: { role: "retailer" },
+        timeoutMs: 120000,
+      });
+      setDeleteNote(`Removed ${res.deleted || 0} retailer location(s).`);
+      loadLocations();
+    } catch (e) {
+      setDeleteNote(e.message || String(e));
+    }
+  };
+
+  const onImportLocationsFile = async (e) => {
+    const f = e.target.files?.[0];
+    e.target.value = "";
+    if (!f) return;
+    setLocImportReport(null);
+    const minR = locPresets.defaultMinRadius || 200;
+    try {
+      const text = await f.text();
+      const rows = parseCSV(text);
+      const { items, report, stats } = csvRowsToLocationItems(rows, minR, { existingLocations: locations });
+
+      const sectionsFromClient = () => {
+        const sections = [];
+        if (report.skippedDuplicates.length) {
+          sections.push({
+            title: "Duplicates skipped (same name + coordinates as another row in the file or an existing location)",
+            lines: report.skippedDuplicates,
+          });
+        }
+        if (report.fatalErrors.length) {
+          sections.push({ title: "Rows not imported (fix in CSV)", lines: report.fatalErrors });
+        }
+        if (report.rowWarnings.length) {
+          sections.push({
+            title: "Phone / number column (location still imported where applicable; phone left blank)",
+            lines: report.rowWarnings,
+          });
+        }
+        return sections;
+      };
+
+      if (!items.length) {
+        const sections = sectionsFromClient();
+        let headline = "No locations were imported.";
+        let tone = "warn";
+        if (sections.length === 0) {
+          headline = "No data rows found (need a header row and at least one non-empty row).";
+          tone = "bad";
+        } else if (report.fatalErrors.length > 0 && report.skippedDuplicates.length === 0) {
+          tone = "bad";
+        } else if (report.fatalErrors.length === 0 && report.skippedDuplicates.length > 0) {
+          headline = "Nothing new to import — every row was a duplicate or invalid.";
+        }
+        setLocImportReport({ tone, headline, sections, stats });
+        return;
+      }
+
+      // Local apiFetch aborts at 20s; bulk import used to call save() per row on the server (very slow).
+      // Server now saves once per request; we still chunk so each POST stays small and well under the timeout.
+      const LOC_IMPORT_CHUNK = 400;
+      let serverCreated = [];
+      let serverErrors = [];
+      const nBatches = Math.ceil(items.length / LOC_IMPORT_CHUNK);
+      for (let off = 0; off < items.length; off += LOC_IMPORT_CHUNK) {
+        const chunk = items.slice(off, off + LOC_IMPORT_CHUNK);
+        const res = await apiFetch("/routemgr/locations/import", {
+          method: "POST",
+          body: { items: chunk },
+          timeoutMs: 120000,
+        });
+        serverCreated = serverCreated.concat(res.created || []);
+        serverErrors = serverErrors.concat(res.errors || []);
+      }
+      const sections = sectionsFromClient();
+      const createdLines = serverCreated.map((c) => {
+        const nm = c.name != null ? `"${String(c.name)}"` : "Unnamed";
+        return c.csvRow != null ? `CSV row ${c.csvRow}: ${nm}` : nm;
+      });
+      if (createdLines.length) {
+        const maxShow = 30;
+        sections.unshift({
+          title: `Saved (${serverCreated.length})`,
+          lines:
+            createdLines.length > maxShow
+              ? [...createdLines.slice(0, maxShow), `… and ${createdLines.length - maxShow} more`]
+              : createdLines,
+        });
+      }
+      if (serverErrors.length) {
+        sections.push({
+          title: "Server could not save these rows",
+          lines: serverErrors.map((x) => (x && x.message ? x.message : String(x))),
+        });
+      }
+
+      const failed = serverErrors.length;
+      let tone = "ok";
+      if (failed > 0) tone = "bad";
+      else if (report.skippedDuplicates.length || report.rowWarnings.length) tone = "warn";
+
+      let headline;
+      if (failed > 0) {
+        headline = `Partial import: ${serverCreated.length} saved, ${failed} failed — see details below.`;
+      } else if (serverCreated.length > 0) {
+        headline = `Import succeeded: ${serverCreated.length} location(s) saved.`;
+        if (report.skippedDuplicates.length || report.rowWarnings.length) {
+          headline += " Review skipped rows and phone notes below.";
+        }
+      } else {
+        headline = "Import finished — no locations were saved.";
+        tone = "bad";
+      }
+
+      setLocImportReport({
+        tone,
+        headline,
+        sections,
+        stats,
+        importBatches: nBatches > 1 ? nBatches : null,
+        importChunkSize: nBatches > 1 ? LOC_IMPORT_CHUNK : null,
+      });
+      loadLocations();
+    } catch (err) {
+      setLocImportReport({
+        tone: "bad",
+        headline: "Import failed",
+        sections: [{ title: "Error", lines: [err.message || String(err)] }],
+        stats: null,
+      });
+    }
+  };
+
+  const applyBulkLocEdits = async () => {
+    if (selectedLocIds.size === 0) {
+      alert("Select at least one location.");
+      return;
+    }
+    const minR = locPresets.defaultMinRadius || 200;
+    const body = { ids: [...selectedLocIds] };
+    if (bulkIconKey) body.iconKey = bulkIconKey;
+    if (bulkColor) body.color = bulkColor;
+    if (bulkRadius.trim() !== "") {
+      const r = Number(bulkRadius);
+      if (!Number.isFinite(r)) {
+        alert("Enter a valid radius in metres.");
+        return;
+      }
+      if (r < minR) {
+        alert(`Radius must be at least ${minR} m.`);
+        return;
+      }
+      body.radius = r;
+    }
+    if (!body.iconKey && !body.color && body.radius == null) {
+      alert("Choose a colour, icon, and/or radius to apply.");
+      return;
+    }
+    const selectedLocs = locations.filter((l) => selectedLocIds.has(l.id));
+    const anyCircle = selectedLocs.some((l) => l.type !== "polygon");
+    if (body.radius != null && !anyCircle) {
+      alert("Detection radius applies only to circle locations. Your selection is all polygons — choose colour and/or icon, or include circle locations.");
+      return;
+    }
+    try {
+      await apiFetch("/routemgr/locations/bulk", { method: "PATCH", body });
+      setSelectedLocIds(new Set());
+      setBulkIconKey("");
+      setBulkColor("");
+      setBulkRadius("");
+      loadLocations();
+    } catch (e) {
+      alert(e.message);
+    }
   };
 
   const deleteLocation = async (id) => {
     if (!confirm('Delete this location?')) return;
-    try { await apiFetch(`/routemgr/locations/${id}`, { method: 'DELETE' }); loadAll(); }
+    try { await apiFetch(`/routemgr/locations/${id}`, { method: 'DELETE' }); loadLocations(); }
     catch (e) { alert(e.message); }
   };
 
-  const saveRoute = async () => {
-    const { id, name, fromId, toId, color, speedLimitKmh } = routeModal;
-    if (!name.trim() || !fromId || !toId) return;
-    try {
-      if (id) await apiFetch(`/routemgr/routes/${id}`, { method: 'PUT', body: JSON.stringify({ name, fromId, toId, color, speedLimitKmh }) });
-      else    await apiFetch('/routemgr/routes',        { method: 'POST', body: JSON.stringify({ name, fromId, toId, color, speedLimitKmh }) });
-      setRouteModal(null); loadAll();
-    } catch (e) { alert(e.message); }
-  };
+  if (loading) return <Spinner label="Loading locations…" />;
+  if (error)   return <ErrorBanner message={error} onRetry={loadLocations} />;
 
-  const deleteRoute = async (id) => {
-    if (!confirm('Delete this route?')) return;
-    try { await apiFetch(`/routemgr/routes/${id}`, { method: 'DELETE' }); loadAll(); }
-    catch (e) { alert(e.message); }
-  };
-
-  // ── Shared tab underline style ──────────────────────────────────────────
-  const tabStyle = (id) => ({
-    background: 'transparent', border: 'none',
-    borderBottom: `2px solid ${tab === id ? t.accent : 'transparent'}`,
-    padding: '10px 18px', color: tab === id ? t.accent : t.textSoft,
-    cursor: 'pointer', fontSize: 13, fontWeight: tab === id ? 700 : 500,
-    fontFamily: 'inherit', marginBottom: -1, transition: 'all 0.15s',
-  });
-
-  if (loading) return <Spinner label="Loading Route Tracker…" />;
-  if (error)   return <ErrorBanner message={error} onRetry={loadAll} />;
+  const fillHeight = embedded;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-      {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10 }}>
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: fillHeight ? 10 : 18,
+        flex: fillHeight ? 1 : undefined,
+        minHeight: fillHeight ? 0 : undefined,
+        overflow: fillHeight ? "hidden" : undefined,
+        boxSizing: "border-box",
+        padding: fillHeight ? "8px 12px 10px" : undefined,
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10, flexShrink: 0 }}>
         <div>
-          <h2 style={{ margin: 0, fontSize: 20, fontWeight: 800, color: t.text }}>🗺️ Route Tracker</h2>
+          <h2 style={{ margin: 0, fontSize: 20, fontWeight: 800, color: t.text }}>📌 Locations</h2>
           <div style={{ color: t.muted, fontSize: 13, marginTop: 3 }}>
-            {locations.length} location{locations.length !== 1 ? 's' : ''} · {routes.length} route{routes.length !== 1 ? 's' : ''} defined
+            {locations.length} location{locations.length !== 1 ? 's' : ''} on the map
           </div>
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
-          {tab === 'locations' && <>
-            <Btn onClick={() => {
-              const nextMode = drawMode === 'polygon' ? 'circle' : 'polygon';
-              setDrawMode(nextMode);
-              if (nextMode === 'circle') { setPolyVertices([]); }
-            }} style={{ fontSize: 12, padding: '7px 16px', background: drawMode === 'polygon' ? '#e67e22' : undefined }}>
-              {drawMode === 'polygon' ? `⬡ Drawing… (${polyVertices.length} pts)` : '⬡ Draw Polygon'}
-            </Btn>
-            <Btn onClick={() => setLocModal({ name: '', type: 'circle', lat: -6.8, lng: 39.28, radius: 200, color: ROUTE_COLORS[0] })} style={{ fontSize: 12, padding: '7px 16px' }}>+ Circle</Btn>
-          </>}
-          {tab === 'routes'    && <Btn onClick={() => setRouteModal({ name: '', fromId: '', toId: '', color: ROUTE_COLORS[1], speedLimitKmh: 80 })} style={{ fontSize: 12, padding: '7px 16px' }} disabled={locations.length < 2}>+ Route</Btn>}
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <Btn onClick={() => {
+            const nextMode = drawMode === 'polygon' ? 'circle' : 'polygon';
+            setDrawMode(nextMode);
+            if (nextMode === 'circle') { setPolyVertices([]); }
+          }} style={{ fontSize: 12, padding: '7px 16px', background: drawMode === 'polygon' ? '#e67e22' : undefined }}>
+            {drawMode === 'polygon' ? `⬡ Drawing… (${polyVertices.length} pts)` : '⬡ Draw Polygon'}
+          </Btn>
+          <Btn onClick={() => setLocModal({
+            name: '',
+            type: 'circle',
+            lat: -6.8,
+            lng: 39.28,
+            radius: locPresets.defaultMinRadius || 200,
+            color: ROUTE_COLORS[0],
+            phone: '',
+            contactPerson: '',
+            role: '',
+            placeAddress: '',
+            iconKey: 'pin',
+          })} style={{ fontSize: 12, padding: '7px 16px' }}>+ Circle</Btn>
+          <Btn onClick={downloadLocTemplate} outline style={{ fontSize: 12, padding: '7px 16px' }}>⬇ Template CSV</Btn>
+          <Btn onClick={() => importLocInputRef.current?.click()} outline style={{ fontSize: 12, padding: '7px 16px' }}>⬆ Upload CSV</Btn>
+          <input ref={importLocInputRef} type="file" accept=".csv,text/csv" style={{ display: 'none' }} onChange={onImportLocationsFile} />
+          <Btn onClick={removeRetailers} outline style={{ fontSize: 12, padding: '7px 16px', borderColor: t.red, color: t.red }}>
+            🗑 Remove Retailers
+          </Btn>
         </div>
       </div>
-
-      {/* Tab bar */}
-      <div style={{ display: 'flex', gap: 4, borderBottom: `1px solid ${t.border}` }}>
-        {[['locations','📍 Locations'],['routes','🛣️ Routes'],['rankings','🏆 Rankings'],['leaderboard','🎖️ Leaderboard']].map(([id, lbl]) => (
-          <button key={id} style={tabStyle(id)} onClick={() => setTab(id)}>{lbl}</button>
-        ))}
+      <div style={{ fontSize: 11, color: t.muted, maxWidth: 720, lineHeight: 1.45, flexShrink: 0 }}>
+        Map is limited to Tanzania (small outer margin). You cannot zoom out past that area. Template CSV: name, lat, lng, radius_m, optional phone (9–15 digits; leave blank if none — invalid values are skipped and reported), contact_person, role, place_address. Imports use default colour and pin — use bulk edit for colour, icon, and/or radius (circles only).
       </div>
 
-      {/* ── LOCATIONS TAB ── */}
-      {tab === 'locations' && (
-        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12, flexShrink: 0 }}>
+          {deleteNote && (
+            <div style={{ fontSize: 12, color: t.textSoft, background: t.bgAlt, border: `1px solid ${t.border}`, borderRadius: 10, padding: '10px 14px' }}>
+              {deleteNote}
+            </div>
+          )}
+          {locImportReport && (
+            <div
+              style={{
+                fontSize: 12,
+                color: t.text,
+                background: t.bgAlt,
+                border: `1px solid ${t.border}`,
+                borderLeftWidth: 4,
+                borderLeftColor:
+                  locImportReport.tone === "ok" ? "#27ae60" : locImportReport.tone === "warn" ? "#e67e22" : "#e74c3c",
+                borderRadius: 10,
+                padding: "12px 14px",
+              }}
+            >
+              <div style={{ fontWeight: 700, marginBottom: 8 }}>{locImportReport.headline}</div>
+              {locImportReport.importBatches != null && locImportReport.importChunkSize != null && (
+                <div style={{ fontSize: 11, color: t.muted, marginBottom: 10, lineHeight: 1.45 }}>
+                  Sent in {locImportReport.importBatches} requests (up to {locImportReport.importChunkSize} new locations
+                  each) so large files finish before the 20s request timeout.
+                </div>
+              )}
+              {locImportReport.stats && (
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "minmax(120px, 42%) 1fr",
+                    gap: "6px 14px",
+                    fontSize: 12,
+                    marginBottom: 12,
+                    paddingBottom: 12,
+                    borderBottom: `1px solid ${t.border}`,
+                  }}
+                >
+                  <span style={{ color: t.muted }}>Non-empty rows</span>
+                  <span style={{ fontWeight: 600 }}>{locImportReport.stats.nonEmptyDataRows.toLocaleString()}</span>
+                  <span style={{ color: t.muted }}>After deduplication</span>
+                  <span style={{ fontWeight: 600 }}>{locImportReport.stats.rowsQueuedForImport.toLocaleString()}</span>
+                  {locImportReport.stats.duplicateInFileSkipped > 0 && (
+                    <>
+                      <span style={{ color: t.muted }}>Skipped (dup in file)</span>
+                      <span>{locImportReport.stats.duplicateInFileSkipped.toLocaleString()}</span>
+                    </>
+                  )}
+                  {locImportReport.stats.duplicateExistingSkipped > 0 && (
+                    <>
+                      <span style={{ color: t.muted }}>Skipped (already saved)</span>
+                      <span>{locImportReport.stats.duplicateExistingSkipped.toLocaleString()}</span>
+                    </>
+                  )}
+                  {locImportReport.stats.invalidRowsSkipped > 0 && (
+                    <>
+                      <span style={{ color: t.muted }}>Skipped (invalid)</span>
+                      <span>{locImportReport.stats.invalidRowsSkipped.toLocaleString()}</span>
+                    </>
+                  )}
+                  {locImportReport.stats.phoneNotesCount > 0 && (
+                    <>
+                      <span style={{ color: t.muted }}>Phone notes</span>
+                      <span>{locImportReport.stats.phoneNotesCount.toLocaleString()} (imported without phone)</span>
+                    </>
+                  )}
+                  <span style={{ color: t.muted, gridColumn: "1 / -1", fontSize: 11, lineHeight: 1.45, marginTop: 4 }}>
+                    Deduplication matches Excel only if Excel used the same rule: same location name + same lat/lng (rounded to 5 decimals). Rows already in this app count as duplicates too.
+                  </span>
+                </div>
+              )}
+              {locImportReport.sections.map((sec, si) => (
+                <div key={si} style={{ marginTop: si ? 12 : 0 }}>
+                  <div style={{ fontWeight: 600, color: t.textSoft, fontSize: 11, marginBottom: 6 }}>{sec.title}</div>
+                  <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.5 }}>
+                    {sec.lines.map((line, li) => (
+                      <li key={li} style={{ color: t.textSoft }}>
+                        {line}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </div>
+          )}
+          {locations.length > 0 && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10, padding: '10px 14px', background: t.panel, border: `1px solid ${t.border}`, borderRadius: 12 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: t.textSoft, cursor: 'pointer', fontFamily: 'inherit' }}>
+                <input
+                  type="checkbox"
+                  checked={selectedLocIds.size > 0 && selectedLocIds.size === locations.length}
+                  ref={(el) => {
+                    if (el) el.indeterminate = selectedLocIds.size > 0 && selectedLocIds.size < locations.length;
+                  }}
+                  onChange={(e) => {
+                    if (e.target.checked) setSelectedLocIds(new Set(locations.map((l) => l.id)));
+                    else setSelectedLocIds(new Set());
+                  }}
+                />
+                All
+              </label>
+              <span style={{ fontSize: 12, color: t.muted }}>{selectedLocIds.size} selected</span>
+              <Sel label="" value={bulkColor} onChange={(e) => setBulkColor(e.target.value)} style={{ minWidth: 160 }}>
+                <option value="">— Colour —</option>
+                {ROUTE_COLORS.map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </Sel>
+              <Sel label="" value={bulkIconKey} onChange={(e) => setBulkIconKey(e.target.value)} style={{ minWidth: 180 }}>
+                <option value="">— Icon —</option>
+                {locPresets.icons.map((ic) => (
+                  <option key={ic.id} value={ic.id}>{ic.emoji} {ic.label}</option>
+                ))}
+              </Sel>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 12, fontWeight: 600, color: t.textSoft, whiteSpace: 'nowrap' }}>
+                  Radius (m)
+                </span>
+                <Inp
+                  label=""
+                  type="number"
+                  title="Bulk detection radius — circle locations only"
+                  placeholder={`≥${locPresets.defaultMinRadius || 200}`}
+                  value={bulkRadius}
+                  onChange={(e) => setBulkRadius(e.target.value)}
+                  min={locPresets.defaultMinRadius || 200}
+                  max={5000}
+                  style={{ width: 120 }}
+                />
+              </div>
+              <Btn onClick={applyBulkLocEdits} disabled={selectedLocIds.size === 0} style={{ fontSize: 12, padding: '7px 14px' }}>
+                Apply to selected
+              </Btn>
+            </div>
+          )}
+        </div>
+        <div
+          style={{
+            display: "flex",
+            flexDirection: narrow ? "column" : "row",
+            gap: 16,
+            flex: fillHeight ? 1 : undefined,
+            minHeight: fillHeight ? 0 : undefined,
+            overflow: "hidden",
+          }}
+        >
           {/* Map */}
-          <div style={{ flex: '1 1 420px', minWidth: 300, borderRadius: 14, overflow: 'hidden', border: `1px solid ${t.border}`, height: 420, position: 'relative' }}>
-            <div ref={mapRef} style={{ width: '100%', height: '100%' }} />
+          <div
+            style={{
+              flex: fillHeight ? "1 1 58%" : "1 1 420px",
+              minWidth: narrow ? undefined : 280,
+              minHeight: fillHeight ? (narrow ? 240 : 0) : undefined,
+              height: fillHeight ? (narrow ? "min(42vh, 380px)" : "100%") : 420,
+              borderRadius: 14,
+              overflow: "hidden",
+              border: `1px solid ${t.border}`,
+              position: "relative",
+            }}
+          >
+            <div ref={mapRef} style={{ width: "100%", height: "100%" }} />
             <div style={{ position: 'absolute', bottom: 8, left: 8, background: t.panel, borderRadius: 8, padding: '6px 12px', fontSize: 11, color: t.textSoft, zIndex: 1000, border: `1px solid ${t.border}` }}>
               {drawMode === 'polygon' ? '⬡ Click map to add polygon vertices' : '📍 Click map to place a circle location'}
             </div>
@@ -3849,245 +4652,151 @@ function RoutesView({ vehicles }) {
             )}
           </div>
           {/* Locations list */}
-          <div style={{ flex: '1 1 260px', minWidth: 240, display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div
+            style={{
+              flex: fillHeight ? (narrow ? "1 1 36%" : "0 0 min(380px, 36vw)") : "1 1 280px",
+              minWidth: narrow ? undefined : 260,
+              maxWidth: narrow ? undefined : 420,
+              minHeight: fillHeight ? (narrow ? 200 : 0) : undefined,
+              display: "flex",
+              flexDirection: "column",
+              gap: 8,
+            }}
+          >
+            <input
+              type="search"
+              value={locPanelSearch}
+              onChange={(e) => setLocPanelSearch(e.target.value)}
+              placeholder="Search name, role, address, phone…"
+              style={{
+                width: '100%', boxSizing: 'border-box',
+                background: t.bgAlt, border: `1px solid ${t.border}`, borderRadius: 10,
+                padding: '9px 12px', color: t.text, fontSize: 13, fontFamily: 'inherit', outline: 'none',
+              }}
+            />
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <Sel label="" value={locRoleFilter} onChange={(e) => setLocRoleFilter(e.target.value)} style={{ flex: '1 1 120px', minWidth: 100 }}>
+                <option value="">All roles</option>
+                {roleOptions.map((r) => (
+                  <option key={r} value={r}>{r}</option>
+                ))}
+              </Sel>
+              <Sel label="" value={locTypeFilter} onChange={(e) => setLocTypeFilter(e.target.value)} style={{ flex: '1 1 120px', minWidth: 100 }}>
+                <option value="all">All types</option>
+                <option value="circle">Circles</option>
+                <option value="polygon">Polygons</option>
+              </Sel>
+            </div>
+            <div style={{ fontSize: 11, color: t.muted }}>
+              {filteredLocs.length === locations.length
+                ? `${locations.length} location${locations.length !== 1 ? 's' : ''}`
+                : `${filteredLocs.length} of ${locations.length} shown`}
+              <span style={{ marginLeft: 8, opacity: 0.85 }}>· Click a row to zoom the map</span>
+            </div>
+            <div
+              style={{
+                overflowY: "auto",
+                flex: fillHeight ? 1 : undefined,
+                minHeight: fillHeight ? 0 : undefined,
+                display: "flex",
+                flexDirection: "column",
+                gap: 8,
+                maxHeight: fillHeight ? undefined : 360,
+              }}
+            >
             {locations.length === 0 ? (
               <div style={{ textAlign: 'center', padding: '40px 20px', color: t.muted, background: t.panel, borderRadius: 14, border: `1px solid ${t.border}` }}>
                 <div style={{ fontSize: 36, marginBottom: 8 }}>📍</div>
                 <div style={{ fontWeight: 700, marginBottom: 4 }}>No locations yet</div>
                 <div style={{ fontSize: 12 }}>Click the map to place a waypoint</div>
               </div>
-            ) : locations.map(loc => (
-              <div key={loc.id} style={{ background: t.panel, borderRadius: 12, border: `1px solid ${t.border}`, padding: '12px 14px', display: 'flex', alignItems: 'center', gap: 10 }}>
-                <div style={{ width: 10, height: 10, borderRadius: '50%', background: loc.color, flexShrink: 0, boxShadow: `0 0 6px ${loc.color}` }} />
+            ) : filteredLocs.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '24px 16px', color: t.muted, background: t.panel, borderRadius: 14, border: `1px solid ${t.border}`, fontSize: 13 }}>
+                No locations match filters
+              </div>
+            ) : filteredLocs.map((loc) => (
+              <div
+                key={loc.id}
+                role="button"
+                tabIndex={0}
+                onClick={() => focusLocationOnMap(loc)}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); focusLocationOnMap(loc); } }}
+                style={{
+                  background: highlightedLocId === loc.id ? t.accentSoft : t.panel,
+                  borderRadius: 12,
+                  border: `1px solid ${highlightedLocId === loc.id ? t.accent : t.border}`,
+                  padding: '12px 14px',
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: 10,
+                  cursor: 'pointer',
+                  outline: 'none',
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={selectedLocIds.has(loc.id)}
+                  onChange={() => setSelectedLocIds((prev) => {
+                    const n = new Set(prev);
+                    if (n.has(loc.id)) n.delete(loc.id);
+                    else n.add(loc.id);
+                    return n;
+                  })}
+                  onClick={(e) => e.stopPropagation()}
+                  style={{ marginTop: 4 }}
+                />
+                <div style={{ fontSize: 18, lineHeight: 1, flexShrink: 0 }}>{locEmoji(loc, locPresets.icons)}</div>
+                <div style={{ width: 10, height: 10, borderRadius: '50%', background: loc.color, flexShrink: 0, boxShadow: `0 0 6px ${loc.color}`, marginTop: 5 }} />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontWeight: 700, fontSize: 13, color: t.text }}>{loc.name}</div>
                   <div style={{ color: t.muted, fontSize: 11, marginTop: 2 }}>
                     {loc.type === 'polygon'
                       ? `⬡ Polygon · ${loc.polygon?.length || 0} vertices`
                       : `📍 Circle · r=${loc.radius}m`}
+                    {loc.role ? ` · ${loc.role}` : ''}
                   </div>
+                  {(loc.contactPerson || loc.phone || loc.placeAddress) && (
+                    <div style={{ color: t.textSoft, fontSize: 10, marginTop: 4, lineHeight: 1.35 }}>
+                      {[loc.contactPerson, loc.phone, loc.placeAddress].filter(Boolean).join(' · ')}
+                    </div>
+                  )}
                 </div>
-                <button onClick={() => setLocModal(loc.type === 'polygon'
-                  ? { id: loc.id, name: loc.name, type: 'polygon', polygon: loc.polygon, color: loc.color }
-                  : { id: loc.id, name: loc.name, type: 'circle', lat: loc.lat, lng: loc.lng, radius: loc.radius, color: loc.color })}
-                  style={{ background: 'transparent', border: `1px solid ${t.border}`, borderRadius: 7, padding: '4px 10px', color: t.textSoft, cursor: 'pointer', fontSize: 11, fontFamily: 'inherit' }}>Edit</button>
-                <button onClick={() => deleteLocation(loc.id)}
-                  style={{ background: 'transparent', border: 'none', color: t.red, cursor: 'pointer', fontSize: 16, lineHeight: 1, fontFamily: 'inherit' }}>×</button>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setLocModal({
+                      id: loc.id,
+                      name: loc.name,
+                      type: loc.type || 'circle',
+                      lat: loc.lat,
+                      lng: loc.lng,
+                      radius: loc.radius ?? locPresets.defaultMinRadius,
+                      polygon: loc.polygon,
+                      color: loc.color,
+                      phone: loc.phone || '',
+                      contactPerson: loc.contactPerson || '',
+                      role: loc.role || '',
+                      placeAddress: loc.placeAddress || '',
+                      iconKey: loc.iconKey || 'pin',
+                    });
+                  }}
+                  style={{ background: 'transparent', border: `1px solid ${t.border}`, borderRadius: 7, padding: '4px 10px', color: t.textSoft, cursor: 'pointer', fontSize: 11, fontFamily: 'inherit' }}
+                >
+                  Edit
+                </button>
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); deleteLocation(loc.id); }}
+                  style={{ background: 'transparent', border: 'none', color: t.red, cursor: 'pointer', fontSize: 16, lineHeight: 1, fontFamily: 'inherit' }}
+                >
+                  ×
+                </button>
               </div>
             ))}
+            </div>
           </div>
         </div>
-      )}
-
-      {/* ── ROUTES TAB ── */}
-      {tab === 'routes' && (
-        <Panel>
-          {routes.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: '48px 40px', color: t.muted }}>
-              <div style={{ fontSize: 40, marginBottom: 10 }}>🛣️</div>
-              <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 6, color: t.text }}>No routes defined yet</div>
-              <div style={{ fontSize: 13, marginBottom: 20 }}>
-                {locations.length < 2 ? 'Add at least 2 locations first, then create routes between them.' : 'Click "+ Route" to link two locations.'}
-              </div>
-              {locations.length >= 2 && <Btn onClick={() => setRouteModal({ name: '', fromId: '', toId: '', color: ROUTE_COLORS[1], speedLimitKmh: 80 })}>+ Create First Route</Btn>}
-            </div>
-          ) : (
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-                <thead>
-                  <tr style={{ background: t.bgAlt }}>
-                    {['Color','Route Name','From → To','Speed Limit','Created',''].map(h => (
-                      <th key={h} style={{ padding: '10px 14px', textAlign: 'left', color: t.muted, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.8, borderBottom: `1px solid ${t.border}` }}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {routes.map((r, i) => (
-                    <tr key={r.id} style={{ background: i % 2 ? `${t.bgAlt}55` : 'transparent', borderBottom: `1px solid ${t.border}55` }}>
-                      <td style={{ padding: '10px 14px' }}><div style={{ width: 14, height: 14, borderRadius: '50%', background: r.color }} /></td>
-                      <td style={{ padding: '10px 14px', fontWeight: 700, color: t.text }}>{r.name}</td>
-                      <td style={{ padding: '10px 14px', color: t.textSoft }}>
-                        <span style={{ color: t.blue }}>{r.fromName}</span>
-                        <span style={{ margin: '0 8px', color: t.muted }}>→</span>
-                        <span style={{ color: t.green }}>{r.toName}</span>
-                        <span style={{ color: t.muted, marginLeft: 8, fontSize: 11 }}>(bidirectional)</span>
-                      </td>
-                      <td style={{ padding: '10px 14px', color: t.textSoft }}>{r.speedLimitKmh || 80} km/h</td>
-                      <td style={{ padding: '10px 14px', color: t.muted, fontSize: 11 }}>{r.createdAt ? new Date(r.createdAt).toLocaleDateString() : '—'}</td>
-                      <td style={{ padding: '10px 14px', textAlign: 'right', display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-                        <button onClick={() => setRouteModal({ id: r.id, name: r.name, fromId: r.fromId, toId: r.toId, color: r.color, speedLimitKmh: r.speedLimitKmh || 80 })}
-                          style={{ background: 'transparent', border: `1px solid ${t.border}`, borderRadius: 7, padding: '4px 12px', color: t.textSoft, cursor: 'pointer', fontSize: 11, fontFamily: 'inherit' }}>Edit</button>
-                        <button onClick={() => deleteRoute(r.id)}
-                          style={{ background: 'transparent', border: `1px solid ${t.red}44`, borderRadius: 7, padding: '4px 12px', color: t.red, cursor: 'pointer', fontSize: 11, fontFamily: 'inherit' }}>Delete</button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </Panel>
-      )}
-
-      {/* ── RANKINGS TAB ── */}
-      {tab === 'rankings' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          {/* Route selector */}
-          <Panel>
-            <div style={{ padding: '14px 18px', display: 'flex', alignItems: 'center', gap: 12 }}>
-              <span style={{ color: t.textSoft, fontSize: 13, fontWeight: 600 }}>Select Route:</span>
-              <select value={selectedRouteId} onChange={e => setSelectedRouteId(e.target.value)}
-                style={{ background: t.bgAlt, border: `1px solid ${t.border}`, borderRadius: 10, padding: '8px 14px', color: t.text, fontSize: 13, fontFamily: 'inherit', outline: 'none', cursor: 'pointer', flex: 1, maxWidth: 320 }}>
-                <option value="">— Choose a route —</option>
-                {routes.map(r => <option key={r.id} value={r.id}>{r.name} ({r.fromName} ↔ {r.toName})</option>)}
-              </select>
-            </div>
-          </Panel>
-
-          {selectedRouteId && (
-            <>
-              {rankings.length === 0 ? (
-                <div style={{ textAlign: 'center', padding: '48px 40px', background: t.panel, borderRadius: 16, border: `1px solid ${t.border}` }}>
-                  <div style={{ fontSize: 40, marginBottom: 10 }}>⏳</div>
-                  <div style={{ fontWeight: 700, color: t.text, marginBottom: 6 }}>No trips on this route yet</div>
-                  <div style={{ fontSize: 13, color: t.muted }}>Rankings will appear automatically as vehicles complete this route.</div>
-                </div>
-              ) : (
-                <>
-                  {/* Bar chart */}
-                  <Panel title={`🏆 VEHICLE RANKINGS — ${routes.find(r => r.id === selectedRouteId)?.name || ''}`}>
-                    <div style={{ padding: '16px 18px' }}>
-                      <RankingBarChart rankings={rankings} />
-                    </div>
-                  </Panel>
-
-                  {/* Rankings table */}
-                  <Panel title={`📋 SCORE DETAILS (${rankings.length} vehicles)`}>
-                    <div style={{ overflowX: 'auto' }}>
-                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-                        <thead>
-                          <tr style={{ background: t.bgAlt }}>
-                            {['Rank','Vehicle','Avg Score','Trips','Distance','Fuel/100km','Avg Time','Avg Speed'].map(h => (
-                              <th key={h} style={{ padding: '10px 14px', textAlign: 'left', color: t.muted, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.8, borderBottom: `1px solid ${t.border}`, whiteSpace: 'nowrap' }}>{h}</th>
-                            ))}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {rankings.map((r, i) => (
-                            <tr key={r.devIdno} style={{ background: i % 2 ? `${t.bgAlt}55` : 'transparent', borderBottom: `1px solid ${t.border}55` }}>
-                              <td style={{ padding: '10px 14px' }}>
-                                <span style={{ fontSize: 18 }}>{i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `#${r.rank}`}</span>
-                              </td>
-                              <td style={{ padding: '10px 14px', fontWeight: 700, color: t.text }}>{r.plate}</td>
-                              <td style={{ padding: '10px 14px', minWidth: 140 }}><RouteScoreBar score={r.avgScore || 0} /></td>
-                              <td style={{ padding: '10px 14px', color: t.accent, fontWeight: 700 }}>{r.totalTrips}</td>
-                              <td style={{ padding: '10px 14px', color: t.textSoft }}>{r.totalDistanceKm ? `${r.totalDistanceKm} km` : '—'}</td>
-                              <td style={{ padding: '10px 14px', color: r.avgFuelPer100km > 40 ? t.red : r.avgFuelPer100km > 25 ? t.orange : t.green }}>
-                                {r.avgFuelPer100km != null ? `${r.avgFuelPer100km}/100km` : '—'}
-                              </td>
-                              <td style={{ padding: '10px 14px', color: t.textSoft }}>{r.avgDurationMin != null ? `${r.avgDurationMin} min` : '—'}</td>
-                              <td style={{ padding: '10px 14px', color: t.textSoft }}>{r.avgSpeedKmh != null ? `${r.avgSpeedKmh} km/h` : '—'}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </Panel>
-
-                  {/* Recent trips */}
-                  {trips.length > 0 && (
-                    <Panel title={`🕒 RECENT TRIPS (${trips.length})`}>
-                      <div style={{ overflowX: 'auto' }}>
-                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-                          <thead>
-                            <tr style={{ background: t.bgAlt }}>
-                              {['Vehicle','Start Time','Duration','Distance','Fuel Used','Max Speed','Score'].map(h => (
-                                <th key={h} style={{ padding: '9px 12px', textAlign: 'left', color: t.muted, fontWeight: 700, fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.8, borderBottom: `1px solid ${t.border}` }}>{h}</th>
-                              ))}
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {trips.map((trip, i) => (
-                              <tr key={trip.id} style={{ background: i % 2 ? `${t.bgAlt}44` : 'transparent', borderBottom: `1px solid ${t.border}44` }}>
-                                <td style={{ padding: '9px 12px', fontWeight: 700, color: t.text }}>{trip.plate}</td>
-                                <td style={{ padding: '9px 12px', color: t.textSoft }}>{trip.startTime ? new Date(trip.startTime).toLocaleString('en-TZ', { day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit' }) : '—'}</td>
-                                <td style={{ padding: '9px 12px', color: t.textSoft }}>{trip.durationMin} min</td>
-                                <td style={{ padding: '9px 12px', color: t.textSoft }}>{trip.distanceKm} km</td>
-                                <td style={{ padding: '9px 12px', color: trip.fuelUsed < 0 ? t.red : t.textSoft }}>{trip.fuelUsed != null ? `${trip.fuelUsed} (${trip.fuelPer100km ?? '?'}/100km)` : '—'}</td>
-                                <td style={{ padding: '9px 12px', color: trip.maxSpeedKmh > 80 ? t.red : t.textSoft }}>{trip.maxSpeedKmh != null ? `${trip.maxSpeedKmh} km/h` : '—'}</td>
-                                <td style={{ padding: '9px 12px' }}><RouteScoreBar score={trip.score || 0} size="sm" /></td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    </Panel>
-                  )}
-                </>
-              )}
-            </>
-          )}
-        </div>
-      )}
-
-      {/* ── LEADERBOARD TAB ── */}
-      {tab === 'leaderboard' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          {leaderboard.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: '60px 40px', background: t.panel, borderRadius: 16, border: `1px solid ${t.border}` }}>
-              <div style={{ fontSize: 52, marginBottom: 12 }}>🏆</div>
-              <div style={{ fontWeight: 800, fontSize: 16, color: t.text, marginBottom: 6 }}>Leaderboard is empty</div>
-              <div style={{ fontSize: 13, color: t.muted }}>Define locations and routes, then let vehicles drive — scores accumulate automatically.</div>
-            </div>
-          ) : (
-            <>
-              {/* Podium */}
-              <Panel title="🏆 TOP PERFORMERS">
-                <div style={{ padding: '0 18px 18px' }}>
-                  <Podium rankings={leaderboard} />
-                </div>
-              </Panel>
-
-              {/* Full leaderboard */}
-              <Panel title={`📊 FULL RANKING (${leaderboard.length} vehicles)`}>
-                <div style={{ overflowX: 'auto' }}>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-                    <thead>
-                      <tr style={{ background: t.bgAlt }}>
-                        {['Rank','Vehicle','Overall Score','Trips','Routes','Distance','Fuel/100km','Fuel (40%)','Time (30%)','Speed (20%)'].map(h => (
-                          <th key={h} style={{ padding: '10px 12px', textAlign: 'left', color: t.muted, fontWeight: 700, fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.8, borderBottom: `1px solid ${t.border}`, whiteSpace: 'nowrap' }}>{h}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {leaderboard.map((r, i) => (
-                        <tr key={r.devIdno} style={{ background: i % 2 ? `${t.bgAlt}55` : 'transparent', borderBottom: `1px solid ${t.border}55` }}>
-                          <td style={{ padding: '10px 12px' }}>
-                            <span style={{ fontSize: 16 }}>{i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `#${r.rank}`}</span>
-                          </td>
-                          <td style={{ padding: '10px 12px', fontWeight: 800, color: t.text }}>{r.plate}</td>
-                          <td style={{ padding: '10px 12px', minWidth: 130 }}><RouteScoreBar score={r.avgScore || 0} /></td>
-                          <td style={{ padding: '10px 12px', color: t.accent, fontWeight: 700 }}>{r.totalTrips}</td>
-                          <td style={{ padding: '10px 12px', color: t.textSoft }}>{r.totalRoutes}</td>
-                          <td style={{ padding: '10px 12px', color: t.textSoft }}>{r.totalDistanceKm ? `${r.totalDistanceKm} km` : '—'}</td>
-                          <td style={{ padding: '10px 12px', color: r.avgFuelPer100km > 40 ? t.red : r.avgFuelPer100km > 25 ? t.orange : t.green }}>
-                            {r.avgFuelPer100km != null ? `${r.avgFuelPer100km}/100km` : '—'}
-                          </td>
-                          <td style={{ padding: '10px 12px' }}><RouteScoreBar score={r.avgScoreFuel || 0} size="sm" /></td>
-                          <td style={{ padding: '10px 12px' }}><RouteScoreBar score={r.avgScoreTime || 0} size="sm" /></td>
-                          <td style={{ padding: '10px 12px' }}><RouteScoreBar score={r.avgScoreSpeed || 0} size="sm" /></td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </Panel>
-            </>
-          )}
-        </div>
-      )}
-
-      {/* ── MODALS ── */}
 
       {/* Location modal */}
       {locModal && (
@@ -4112,9 +4821,36 @@ function RoutesView({ vehicles }) {
                   <Inp label="Latitude" type="number" value={locModal.lat} onChange={e => setLocModal(p => ({ ...p, lat: Number(e.target.value) }))} step="0.000001" />
                   <Inp label="Longitude" type="number" value={locModal.lng} onChange={e => setLocModal(p => ({ ...p, lng: Number(e.target.value) }))} step="0.000001" />
                 </div>
-                <Inp label="Detection Radius (metres)" type="number" value={locModal.radius} onChange={e => setLocModal(p => ({ ...p, radius: Number(e.target.value) }))} min={50} max={5000} />
+                <Inp
+                  label={`Detection radius (metres, min ${locPresets.defaultMinRadius || 200})`}
+                  type="number"
+                  value={locModal.radius}
+                  onChange={(e) => setLocModal((p) => ({ ...p, radius: Number(e.target.value) }))}
+                  min={locPresets.defaultMinRadius || 200}
+                  max={5000}
+                />
               </>
             )}
+            <Inp label="Phone (optional)" value={locModal.phone || ''} onChange={(e) => setLocModal((p) => ({ ...p, phone: e.target.value }))} placeholder="+255…" />
+            <Inp label="Contact person (optional)" value={locModal.contactPerson || ''} onChange={(e) => setLocModal((p) => ({ ...p, contactPerson: e.target.value }))} placeholder="Name" />
+            <Inp
+              label="Role (pick or type)"
+              value={locModal.role || ''}
+              onChange={(e) => setLocModal((p) => ({ ...p, role: e.target.value }))}
+              placeholder="e.g. Distributor"
+              list="loc-role-datalist"
+            />
+            <datalist id="loc-role-datalist">
+              {(locPresets.roles || []).map((r) => (
+                <option key={r} value={r} />
+              ))}
+            </datalist>
+            <Inp label="Place / address (optional)" value={locModal.placeAddress || ''} onChange={(e) => setLocModal((p) => ({ ...p, placeAddress: e.target.value }))} placeholder="Street, city…" />
+            <Sel label="Map marker icon" value={locModal.iconKey || 'pin'} onChange={(e) => setLocModal((p) => ({ ...p, iconKey: e.target.value }))}>
+              {locPresets.icons.map((ic) => (
+                <option key={ic.id} value={ic.id}>{ic.emoji} {ic.label}</option>
+              ))}
+            </Sel>
             <div>
               <div style={{ color: t.muted, fontSize: 11, fontWeight: 700, marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.8 }}>Colour</div>
               <ColorPicker value={locModal.color} onChange={c => setLocModal(p => ({ ...p, color: c }))} />
@@ -4126,28 +4862,527 @@ function RoutesView({ vehicles }) {
           </div>
         </ErpModal>
       )}
+    </div>
+  );
+}
 
-      {/* Route modal */}
-      {routeModal && (
-        <ErpModal title={routeModal.id ? 'Edit Route' : 'New Route'} onClose={() => setRouteModal(null)}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-            <Inp label="Route Name *" value={routeModal.name} onChange={e => setRouteModal(p => ({ ...p, name: e.target.value }))} placeholder="e.g. Dar → Airport" />
-            <Sel label="From Location *" value={routeModal.fromId} onChange={e => setRouteModal(p => ({ ...p, fromId: e.target.value }))}>
-              <option value="">— Select start location —</option>
-              {locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
-            </Sel>
-            <Sel label="To Location *" value={routeModal.toId} onChange={e => setRouteModal(p => ({ ...p, toId: e.target.value }))}>
-              <option value="">— Select end location —</option>
-              {locations.filter(l => l.id !== routeModal.fromId).map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
-            </Sel>
-            <Inp label="Speed Limit (km/h)" type="number" value={routeModal.speedLimitKmh} onChange={e => setRouteModal(p => ({ ...p, speedLimitKmh: Number(e.target.value) }))} min={20} max={200} />
-            <div>
-              <div style={{ color: t.muted, fontSize: 11, fontWeight: 700, marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.8 }}>Colour</div>
-              <ColorPicker value={routeModal.color} onChange={c => setRouteModal(p => ({ ...p, color: c }))} />
+/** Routes, rankings, leaderboard — sidebar "Route Tracker". */
+function RoutesView() {
+  const { t } = useTheme();
+  const [tab, setTab] = useState("routes");
+  const [locations, setLocations] = useState([]);
+  const [routes, setRoutes] = useState([]);
+  const [trips, setTrips] = useState([]);
+  const [rankings, setRankings] = useState([]);
+  const [leaderboard, setLeaderboard] = useState([]);
+  const [selectedRouteId, setSelectedRouteId] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [routeModal, setRouteModal] = useState(null);
+
+  const loadAll = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const [locs, rts] = await Promise.all([
+        apiFetch("/routemgr/locations"),
+        apiFetch("/routemgr/routes"),
+      ]);
+      setLocations(locs);
+      setRoutes(rts);
+    } catch (e) {
+      setError(e.message);
+    }
+    setLoading(false);
+  };
+
+  const loadRankings = async (routeId) => {
+    if (!routeId) return;
+    try {
+      const [rnk, tps] = await Promise.all([
+        apiFetch(`/routemgr/rankings/${routeId}`),
+        apiFetch(`/routemgr/trips?routeId=${routeId}&limit=50`),
+      ]);
+      setRankings(rnk);
+      setTrips(tps);
+    } catch (e) {
+      setError(e.message);
+    }
+  };
+
+  const loadLeaderboard = async () => {
+    try {
+      setLeaderboard(await apiFetch("/routemgr/leaderboard"));
+    } catch (e) {
+      setError(e.message);
+    }
+  };
+
+  useEffect(() => {
+    loadAll();
+  }, []);
+
+  useEffect(() => {
+    if (tab === "leaderboard") loadLeaderboard();
+  }, [tab]);
+
+  useEffect(() => {
+    loadRankings(selectedRouteId);
+  }, [selectedRouteId]);
+
+  const saveRoute = async () => {
+    const { id, name, fromId, toId, color, speedLimitKmh } = routeModal;
+    if (!name.trim() || !fromId || !toId) return;
+    const body = { name, fromId, toId, color, speedLimitKmh };
+    try {
+      if (id) await apiFetch(`/routemgr/routes/${id}`, { method: "PUT", body });
+      else await apiFetch("/routemgr/routes", { method: "POST", body });
+      setRouteModal(null);
+      loadAll();
+    } catch (e) {
+      alert(e.message);
+    }
+  };
+
+  const deleteRoute = async (id) => {
+    if (!confirm("Delete this route?")) return;
+    try {
+      await apiFetch(`/routemgr/routes/${id}`, { method: "DELETE" });
+      loadAll();
+    } catch (e) {
+      alert(e.message);
+    }
+  };
+
+  const tabStyle = (id) => ({
+    background: "transparent",
+    border: "none",
+    borderBottom: `2px solid ${tab === id ? t.accent : "transparent"}`,
+    padding: "10px 18px",
+    color: tab === id ? t.accent : t.textSoft,
+    cursor: "pointer",
+    fontSize: 13,
+    fontWeight: tab === id ? 700 : 500,
+    fontFamily: "inherit",
+    marginBottom: -1,
+    transition: "all 0.15s",
+  });
+
+  if (loading) return <Spinner label="Loading Route Tracker…" />;
+  if (error) return <ErrorBanner message={error} onRetry={loadAll} />;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
+        <div>
+          <h2 style={{ margin: 0, fontSize: 20, fontWeight: 800, color: t.text }}>🗺️ Route Tracker</h2>
+          <div style={{ color: t.muted, fontSize: 13, marginTop: 3 }}>
+            {locations.length} location{locations.length !== 1 ? "s" : ""} · {routes.length} route{routes.length !== 1 ? "s" : ""} defined
+          </div>
+        </div>
+        <Btn
+          onClick={() => setRouteModal({ name: "", fromId: "", toId: "", color: ROUTE_COLORS[1], speedLimitKmh: 80 })}
+          style={{ fontSize: 12, padding: "7px 16px" }}
+          disabled={locations.length < 2}
+        >
+          + Route
+        </Btn>
+      </div>
+
+      <div style={{ display: "flex", gap: 4, borderBottom: `1px solid ${t.border}` }}>
+        {[
+          ["routes", "🛣️ Routes"],
+          ["rankings", "🏆 Rankings"],
+          ["leaderboard", "🎖️ Leaderboard"],
+        ].map(([id, lbl]) => (
+          <button key={id} type="button" style={tabStyle(id)} onClick={() => setTab(id)}>
+            {lbl}
+          </button>
+        ))}
+      </div>
+
+      {tab === "routes" && (
+        <Panel>
+          {routes.length === 0 ? (
+            <div style={{ textAlign: "center", padding: "48px 40px", color: t.muted }}>
+              <div style={{ fontSize: 40, marginBottom: 10 }}>🛣️</div>
+              <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 6, color: t.text }}>No routes defined yet</div>
+              <div style={{ fontSize: 13, marginBottom: 20 }}>
+                {locations.length < 2
+                  ? "Add at least 2 locations first (Locations in the sidebar), then create routes between them."
+                  : 'Click "+ Route" to link two locations.'}
+              </div>
+              {locations.length >= 2 && (
+                <Btn onClick={() => setRouteModal({ name: "", fromId: "", toId: "", color: ROUTE_COLORS[1], speedLimitKmh: 80 })}>
+                  + Create First Route
+                </Btn>
+              )}
             </div>
-            <div style={{ display: 'flex', gap: 10, marginTop: 4 }}>
-              <Btn onClick={saveRoute} disabled={!routeModal.name.trim() || !routeModal.fromId || !routeModal.toId}>{routeModal.id ? 'Save Changes' : 'Create Route'}</Btn>
-              <Btn onClick={() => setRouteModal(null)} outline color={t.muted}>Cancel</Btn>
+          ) : (
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                <thead>
+                  <tr style={{ background: t.bgAlt }}>
+                    {["Color", "Route Name", "From → To", "Speed Limit", "Created", ""].map((h) => (
+                      <th
+                        key={h}
+                        style={{
+                          padding: "10px 14px",
+                          textAlign: "left",
+                          color: t.muted,
+                          fontWeight: 700,
+                          fontSize: 11,
+                          textTransform: "uppercase",
+                          letterSpacing: 0.8,
+                          borderBottom: `1px solid ${t.border}`,
+                        }}
+                      >
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {routes.map((r, i) => (
+                    <tr key={r.id} style={{ background: i % 2 ? `${t.bgAlt}55` : "transparent", borderBottom: `1px solid ${t.border}55` }}>
+                      <td style={{ padding: "10px 14px" }}>
+                        <div style={{ width: 14, height: 14, borderRadius: "50%", background: r.color }} />
+                      </td>
+                      <td style={{ padding: "10px 14px", fontWeight: 700, color: t.text }}>{r.name}</td>
+                      <td style={{ padding: "10px 14px", color: t.textSoft }}>
+                        <span style={{ color: t.blue }}>{r.fromName}</span>
+                        <span style={{ margin: "0 8px", color: t.muted }}>→</span>
+                        <span style={{ color: t.green }}>{r.toName}</span>
+                        <span style={{ color: t.muted, marginLeft: 8, fontSize: 11 }}>(bidirectional)</span>
+                      </td>
+                      <td style={{ padding: "10px 14px", color: t.textSoft }}>{r.speedLimitKmh || 80} km/h</td>
+                      <td style={{ padding: "10px 14px", color: t.muted, fontSize: 11 }}>
+                        {r.createdAt ? new Date(r.createdAt).toLocaleDateString() : "—"}
+                      </td>
+                      <td style={{ padding: "10px 14px", textAlign: "right", display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setRouteModal({
+                              id: r.id,
+                              name: r.name,
+                              fromId: r.fromId,
+                              toId: r.toId,
+                              color: r.color,
+                              speedLimitKmh: r.speedLimitKmh || 80,
+                            })
+                          }
+                          style={{
+                            background: "transparent",
+                            border: `1px solid ${t.border}`,
+                            borderRadius: 7,
+                            padding: "4px 12px",
+                            color: t.textSoft,
+                            cursor: "pointer",
+                            fontSize: 11,
+                            fontFamily: "inherit",
+                          }}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => deleteRoute(r.id)}
+                          style={{
+                            background: "transparent",
+                            border: `1px solid ${t.red}44`,
+                            borderRadius: 7,
+                            padding: "4px 12px",
+                            color: t.red,
+                            cursor: "pointer",
+                            fontSize: 11,
+                            fontFamily: "inherit",
+                          }}
+                        >
+                          Delete
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Panel>
+      )}
+
+      {tab === "rankings" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <Panel>
+            <div style={{ padding: "14px 18px", display: "flex", alignItems: "center", gap: 12 }}>
+              <span style={{ color: t.textSoft, fontSize: 13, fontWeight: 600 }}>Select Route:</span>
+              <select
+                value={selectedRouteId}
+                onChange={(e) => setSelectedRouteId(e.target.value)}
+                style={{
+                  background: t.bgAlt,
+                  border: `1px solid ${t.border}`,
+                  borderRadius: 10,
+                  padding: "8px 14px",
+                  color: t.text,
+                  fontSize: 13,
+                  fontFamily: "inherit",
+                  outline: "none",
+                  cursor: "pointer",
+                  flex: 1,
+                  maxWidth: 320,
+                }}
+              >
+                <option value="">— Choose a route —</option>
+                {routes.map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {r.name} ({r.fromName} ↔ {r.toName})
+                  </option>
+                ))}
+              </select>
+            </div>
+          </Panel>
+
+          {selectedRouteId && (
+            <>
+              {rankings.length === 0 ? (
+                <div style={{ textAlign: "center", padding: "48px 40px", background: t.panel, borderRadius: 16, border: `1px solid ${t.border}` }}>
+                  <div style={{ fontSize: 40, marginBottom: 10 }}>⏳</div>
+                  <div style={{ fontWeight: 700, color: t.text, marginBottom: 6 }}>No trips on this route yet</div>
+                  <div style={{ fontSize: 13, color: t.muted }}>Rankings will appear automatically as vehicles complete this route.</div>
+                </div>
+              ) : (
+                <>
+                  <Panel title={`🏆 VEHICLE RANKINGS — ${routes.find((r) => r.id === selectedRouteId)?.name || ""}`}>
+                    <div style={{ padding: "16px 18px" }}>
+                      <RankingBarChart rankings={rankings} />
+                    </div>
+                  </Panel>
+
+                  <Panel title={`📋 SCORE DETAILS (${rankings.length} vehicles)`}>
+                    <div style={{ overflowX: "auto" }}>
+                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                        <thead>
+                          <tr style={{ background: t.bgAlt }}>
+                            {["Rank", "Vehicle", "Avg Score", "Trips", "Distance", "Fuel/100km", "Avg Time", "Avg Speed"].map((h) => (
+                              <th
+                                key={h}
+                                style={{
+                                  padding: "10px 14px",
+                                  textAlign: "left",
+                                  color: t.muted,
+                                  fontWeight: 700,
+                                  fontSize: 11,
+                                  textTransform: "uppercase",
+                                  letterSpacing: 0.8,
+                                  borderBottom: `1px solid ${t.border}`,
+                                  whiteSpace: "nowrap",
+                                }}
+                              >
+                                {h}
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {rankings.map((r, i) => (
+                            <tr key={r.devIdno} style={{ background: i % 2 ? `${t.bgAlt}55` : "transparent", borderBottom: `1px solid ${t.border}55` }}>
+                              <td style={{ padding: "10px 14px" }}>
+                                <span style={{ fontSize: 18 }}>{i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : `#${r.rank}`}</span>
+                              </td>
+                              <td style={{ padding: "10px 14px", fontWeight: 700, color: t.text }}>{r.plate}</td>
+                              <td style={{ padding: "10px 14px", minWidth: 140 }}>
+                                <RouteScoreBar score={r.avgScore || 0} />
+                              </td>
+                              <td style={{ padding: "10px 14px", color: t.accent, fontWeight: 700 }}>{r.totalTrips}</td>
+                              <td style={{ padding: "10px 14px", color: t.textSoft }}>{r.totalDistanceKm ? `${r.totalDistanceKm} km` : "—"}</td>
+                              <td style={{ padding: "10px 14px", color: r.avgFuelPer100km > 40 ? t.red : r.avgFuelPer100km > 25 ? t.orange : t.green }}>
+                                {r.avgFuelPer100km != null ? `${r.avgFuelPer100km}/100km` : "—"}
+                              </td>
+                              <td style={{ padding: "10px 14px", color: t.textSoft }}>{r.avgDurationMin != null ? `${r.avgDurationMin} min` : "—"}</td>
+                              <td style={{ padding: "10px 14px", color: t.textSoft }}>{r.avgSpeedKmh != null ? `${r.avgSpeedKmh} km/h` : "—"}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </Panel>
+
+                  {trips.length > 0 && (
+                    <Panel title={`🕒 RECENT TRIPS (${trips.length})`}>
+                      <div style={{ overflowX: "auto" }}>
+                        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                          <thead>
+                            <tr style={{ background: t.bgAlt }}>
+                              {["Vehicle", "Start Time", "Duration", "Distance", "Fuel Used", "Max Speed", "Score"].map((h) => (
+                                <th
+                                  key={h}
+                                  style={{
+                                    padding: "9px 12px",
+                                    textAlign: "left",
+                                    color: t.muted,
+                                    fontWeight: 700,
+                                    fontSize: 10,
+                                    textTransform: "uppercase",
+                                    letterSpacing: 0.8,
+                                    borderBottom: `1px solid ${t.border}`,
+                                  }}
+                                >
+                                  {h}
+                                </th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {trips.map((trip, i) => (
+                              <tr key={trip.id} style={{ background: i % 2 ? `${t.bgAlt}44` : "transparent", borderBottom: `1px solid ${t.border}44` }}>
+                                <td style={{ padding: "9px 12px", fontWeight: 700, color: t.text }}>{trip.plate}</td>
+                                <td style={{ padding: "9px 12px", color: t.textSoft }}>
+                                  {trip.startTime
+                                    ? new Date(trip.startTime).toLocaleString("en-TZ", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })
+                                    : "—"}
+                                </td>
+                                <td style={{ padding: "9px 12px", color: t.textSoft }}>{trip.durationMin} min</td>
+                                <td style={{ padding: "9px 12px", color: t.textSoft }}>{trip.distanceKm} km</td>
+                                <td style={{ padding: "9px 12px", color: trip.fuelUsed < 0 ? t.red : t.textSoft }}>
+                                  {trip.fuelUsed != null ? `${trip.fuelUsed} (${trip.fuelPer100km ?? "?"}/100km)` : "—"}
+                                </td>
+                                <td style={{ padding: "9px 12px", color: trip.maxSpeedKmh > 80 ? t.red : t.textSoft }}>
+                                  {trip.maxSpeedKmh != null ? `${trip.maxSpeedKmh} km/h` : "—"}
+                                </td>
+                                <td style={{ padding: "9px 12px" }}>
+                                  <RouteScoreBar score={trip.score || 0} size="sm" />
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </Panel>
+                  )}
+                </>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
+      {tab === "leaderboard" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          {leaderboard.length === 0 ? (
+            <div style={{ textAlign: "center", padding: "60px 40px", background: t.panel, borderRadius: 16, border: `1px solid ${t.border}` }}>
+              <div style={{ fontSize: 52, marginBottom: 12 }}>🏆</div>
+              <div style={{ fontWeight: 800, fontSize: 16, color: t.text, marginBottom: 6 }}>Leaderboard is empty</div>
+              <div style={{ fontSize: 13, color: t.muted }}>Define routes and let vehicles drive — scores accumulate automatically.</div>
+            </div>
+          ) : (
+            <>
+              <Panel title="🏆 TOP PERFORMERS">
+                <div style={{ padding: "0 18px 18px" }}>
+                  <Podium rankings={leaderboard} />
+                </div>
+              </Panel>
+
+              <Panel title={`📊 FULL RANKING (${leaderboard.length} vehicles)`}>
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                    <thead>
+                      <tr style={{ background: t.bgAlt }}>
+                        {["Rank", "Vehicle", "Overall Score", "Trips", "Routes", "Distance", "Fuel/100km", "Fuel (40%)", "Time (30%)", "Speed (20%)"].map((h) => (
+                          <th
+                            key={h}
+                            style={{
+                              padding: "10px 12px",
+                              textAlign: "left",
+                              color: t.muted,
+                              fontWeight: 700,
+                              fontSize: 10,
+                              textTransform: "uppercase",
+                              letterSpacing: 0.8,
+                              borderBottom: `1px solid ${t.border}`,
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {h}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {leaderboard.map((r, i) => (
+                        <tr key={r.devIdno} style={{ background: i % 2 ? `${t.bgAlt}55` : "transparent", borderBottom: `1px solid ${t.border}55` }}>
+                          <td style={{ padding: "10px 12px" }}>
+                            <span style={{ fontSize: 16 }}>{i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : `#${r.rank}`}</span>
+                          </td>
+                          <td style={{ padding: "10px 12px", fontWeight: 800, color: t.text }}>{r.plate}</td>
+                          <td style={{ padding: "10px 12px", minWidth: 130 }}>
+                            <RouteScoreBar score={r.avgScore || 0} />
+                          </td>
+                          <td style={{ padding: "10px 12px", color: t.accent, fontWeight: 700 }}>{r.totalTrips}</td>
+                          <td style={{ padding: "10px 12px", color: t.textSoft }}>{r.totalRoutes}</td>
+                          <td style={{ padding: "10px 12px", color: t.textSoft }}>{r.totalDistanceKm ? `${r.totalDistanceKm} km` : "—"}</td>
+                          <td style={{ padding: "10px 12px", color: r.avgFuelPer100km > 40 ? t.red : r.avgFuelPer100km > 25 ? t.orange : t.green }}>
+                            {r.avgFuelPer100km != null ? `${r.avgFuelPer100km}/100km` : "—"}
+                          </td>
+                          <td style={{ padding: "10px 12px" }}>
+                            <RouteScoreBar score={r.avgScoreFuel || 0} size="sm" />
+                          </td>
+                          <td style={{ padding: "10px 12px" }}>
+                            <RouteScoreBar score={r.avgScoreTime || 0} size="sm" />
+                          </td>
+                          <td style={{ padding: "10px 12px" }}>
+                            <RouteScoreBar score={r.avgScoreSpeed || 0} size="sm" />
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </Panel>
+            </>
+          )}
+        </div>
+      )}
+
+      {routeModal && (
+        <ErpModal title={routeModal.id ? "Edit Route" : "New Route"} onClose={() => setRouteModal(null)}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            <Inp label="Route Name *" value={routeModal.name} onChange={(e) => setRouteModal((p) => ({ ...p, name: e.target.value }))} placeholder="e.g. Dar → Airport" />
+            <Sel label="From Location *" value={routeModal.fromId} onChange={(e) => setRouteModal((p) => ({ ...p, fromId: e.target.value }))}>
+              <option value="">— Select start location —</option>
+              {locations.map((l) => (
+                <option key={l.id} value={l.id}>
+                  {l.name}
+                </option>
+              ))}
+            </Sel>
+            <Sel label="To Location *" value={routeModal.toId} onChange={(e) => setRouteModal((p) => ({ ...p, toId: e.target.value }))}>
+              <option value="">— Select end location —</option>
+              {locations.filter((l) => l.id !== routeModal.fromId).map((l) => (
+                <option key={l.id} value={l.id}>
+                  {l.name}
+                </option>
+              ))}
+            </Sel>
+            <Inp
+              label="Speed Limit (km/h)"
+              type="number"
+              value={routeModal.speedLimitKmh}
+              onChange={(e) => setRouteModal((p) => ({ ...p, speedLimitKmh: Number(e.target.value) }))}
+              min={20}
+              max={200}
+            />
+            <div>
+              <div style={{ color: t.muted, fontSize: 11, fontWeight: 700, marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.8 }}>Colour</div>
+              <ColorPicker value={routeModal.color} onChange={(c) => setRouteModal((p) => ({ ...p, color: c }))} />
+            </div>
+            <div style={{ display: "flex", gap: 10, marginTop: 4 }}>
+              <Btn onClick={saveRoute} disabled={!routeModal.name.trim() || !routeModal.fromId || !routeModal.toId}>
+                {routeModal.id ? "Save Changes" : "Create Route"}
+              </Btn>
+              <Btn onClick={() => setRouteModal(null)} outline color={t.muted}>
+                Cancel
+              </Btn>
             </div>
           </div>
         </ErpModal>
@@ -4167,6 +5402,7 @@ const NAV = [
   { id: "notifs",      icon: "🔔", label: "Notifications" },
   { id: "fuel",        icon: "⛽", label: "Fuel Report"   },
   { id: "fuelrpt",     icon: "📅", label: "Daily/Monthly" },
+  { id: "locations",   icon: "📌", label: "Locations" },
   { id: "routemgr",    icon: "🗺️", label: "Route Tracker" },
   { id: "chat",        icon: "🤖", label: "FleetBot AI"   },
 ];
@@ -4595,11 +5831,18 @@ function FleetDashboardContent({ embedded = false, view: controlledView, onViewC
 
         {/* Views */}
         <div style={{
-          padding: view === "livemap" ? "0" : narrow ? "0 12px 20px" : "0 28px 32px",
-          flex: embedded && view === "livemap" ? 1 : undefined,
-          minHeight: embedded && view === "livemap" ? 0 : undefined,
-          display: embedded && view === "livemap" ? "flex" : undefined,
-          flexDirection: embedded && view === "livemap" ? "column" : undefined,
+          padding:
+            embedded && view === "livemap"
+              ? "0"
+              : embedded && view === "locations"
+                ? "0"
+                : narrow
+                  ? "0 12px 20px"
+                  : "0 28px 32px",
+          flex: embedded && (view === "livemap" || view === "locations") ? 1 : undefined,
+          minHeight: embedded && (view === "livemap" || view === "locations") ? 0 : undefined,
+          display: embedded && (view === "livemap" || view === "locations") ? "flex" : undefined,
+          flexDirection: embedded && (view === "livemap" || view === "locations") ? "column" : undefined,
         }}>
           {view === "dashboard" && (
             snapLoading ? <Spinner label="Fetching live fleet data…" /> :
@@ -4620,7 +5863,8 @@ function FleetDashboardContent({ embedded = false, view: controlledView, onViewC
           {view === "cameras"     && <LiveCamerasView vehicles={filteredVehicles} erpSummary={erpSummary} />}
           {view === "fuel"        && <FuelConsumptionView vehicles={filteredVehicles} erpSummary={erpSummary} />}
           {view === "fuelrpt"     && <FuelDailyMonthlyView vehicles={filteredVehicles} erpSummary={erpSummary} />}
-          {view === "routemgr"    && <RoutesView vehicles={filteredVehicles} erpSummary={erpSummary} />}
+          {view === "locations"   && <LocationsPageView embedded={embedded} />}
+          {view === "routemgr"    && <RoutesView />}
           {view === "chat"        && <ChatView />}
         </div>
       </div>
