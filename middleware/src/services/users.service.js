@@ -115,8 +115,8 @@ function verifyPassword(user, password) {
 
 function ensureDefaultAdmin() {
   if (store.users.length) return null;
-  const username = normalizeUsername(process.env.DEFAULT_ADMIN_USERNAME || 'admin');
-  const password = String(process.env.DEFAULT_ADMIN_PASSWORD || 'Helion');
+  const username = normalizeUsername(process.env.DEFAULT_ADMIN_USERNAME || 'Admin');
+  const password = String(process.env.DEFAULT_ADMIN_PASSWORD || 'Helion@2026');
   const created = createUser({ username, password, role: 'superadmin', companyIds: [], features: { all: true } });
   return { ...created, password };
 }

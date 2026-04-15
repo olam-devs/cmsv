@@ -17,8 +17,8 @@ const NEUTRAL_FIELD_BORDER = "rgba(15, 23, 42, 0.14)";
 const PLACEHOLDER_NEUTRAL = "rgba(71, 85, 105, 0.75)";
 
 export default function Login() {
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
+  const [username, setUsername] = useState("Admin");
+  const [password, setPassword] = useState("Helion@2026");
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
@@ -47,8 +47,8 @@ export default function Login() {
         boxSizing: "border-box",
         display: "flex",
         alignItems: "flex-start",
-        justifyContent: "center",
-        padding: "max(20px, env(safe-area-inset-top)) max(clamp(20px, 5vw, 48px), env(safe-area-inset-right)) max(28px, env(safe-area-inset-bottom)) max(clamp(20px, 5vw, 48px), env(safe-area-inset-left))",
+        justifyContent: "flex-start",
+        padding: "max(20px, env(safe-area-inset-top)) max(clamp(20px, 5vw, 48px), env(safe-area-inset-right)) max(28px, env(safe-area-inset-bottom)) max(clamp(48px, 7vw, 96px), env(safe-area-inset-left))",
         fontFamily: "'DM Sans', 'Inter', system-ui, -apple-system, Segoe UI, Roboto, sans-serif",
         color: INK,
         backgroundColor: "#111",
@@ -62,35 +62,35 @@ export default function Login() {
         style={{
           width: "100%",
           maxWidth: 440,
-          margin: "0 auto",
+          margin: "0",
           display: "flex",
           flexDirection: "column",
           alignItems: "stretch",
           gap: 28,
         }}
       >
-        {/* Brand — centered */}
+        {/* Brand — left aligned */}
         <header
           style={{
-            textAlign: "center",
+            textAlign: "left",
             width: "100%",
             paddingTop: "clamp(8px, 3vh, 28px)",
             display: "flex",
             flexDirection: "column",
-            alignItems: "center",
+            alignItems: "flex-start",
             gap: 16,
           }}
         >
           <img
-            src={`${import.meta.env.BASE_URL}hellion-tracking.png`}
+            src={`${import.meta.env.BASE_URL}helion-logo-slogan.svg`}
             alt="Helion Tracking"
             style={{
               width: "100%",
-              maxWidth: 320,
+              maxWidth: 300,
               height: "auto",
-              maxHeight: 104,
+              maxHeight: 110,
               objectFit: "contain",
-              objectPosition: "center",
+              objectPosition: "left",
               display: "block",
               filter: "drop-shadow(0 2px 14px rgba(0, 0, 0, 0.25))",
             }}
@@ -115,6 +115,7 @@ export default function Login() {
                 lineHeight: 1.55,
                 color: INK_MUTED,
                 maxWidth: 380,
+                textAlign: "left",
                 textShadow: "0 0 12px rgba(255, 255, 255, 0.65)",
               }}
             >
@@ -256,7 +257,7 @@ export default function Login() {
             {loading ? "Signing in…" : "Sign in"}
           </button>
 
-          <p style={{ marginTop: 18, fontSize: 12, color: CAPTION, textAlign: "center", lineHeight: 1.5 }}>
+          <p style={{ marginTop: 18, fontSize: 12, color: CAPTION, textAlign: "left", lineHeight: 1.5 }}>
             Protected access · Authorized personnel only
           </p>
         </form>
