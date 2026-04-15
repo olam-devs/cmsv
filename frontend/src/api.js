@@ -73,7 +73,7 @@ export async function apiFetch(path, opts = {}) {
       json = {};
     }
     if (!res.ok || json.success === false) {
-      if (res.status === 401) throw new Error("Session expired. Please login again.");
+      if (res.status === 401) throw new Error(json.message || json.error || "Session expired. Please login again.");
       const msg =
         json.message ||
         json.error ||
