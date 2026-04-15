@@ -37,6 +37,10 @@ export default function Login() {
       display: "flex",
       flexDirection: "column",
       fontFamily: "'DM Sans', 'Inter', system-ui, -apple-system, sans-serif",
+      backgroundImage: `url(${import.meta.env.BASE_URL}login.png)`,
+      backgroundSize: "cover",
+      backgroundPosition: "center",
+      backgroundRepeat: "no-repeat",
       backgroundColor: "#052e16",
     }}>
 
@@ -48,9 +52,9 @@ export default function Login() {
         alignItems: "center",
         padding: "24px 32px",
         boxSizing: "border-box",
-        background: "rgba(5, 46, 22, 0.95)",
-        borderBottom: "1px solid rgba(52, 211, 153, 0.18)",
-        backdropFilter: "blur(8px)",
+        background: "rgba(0,0,0,0.35)",
+        borderBottom: "1px solid rgba(255,255,255,0.10)",
+        backdropFilter: "blur(6px)",
       }}>
         <img
           src={`${import.meta.env.BASE_URL}helion-logo-slogan.svg`}
@@ -74,10 +78,7 @@ export default function Login() {
           flexDirection: "column",
           justifyContent: "center",
           padding: "56px clamp(28px, 5vw, 72px)",
-          backgroundImage: `linear-gradient(160deg, rgba(5,46,22,0.82) 0%, rgba(20,83,45,0.78) 55%, rgba(22,101,52,0.80) 100%), url(${import.meta.env.BASE_URL}login.png)`,
-          backgroundSize: "cover",
-          backgroundPosition: "center",
-          backgroundRepeat: "no-repeat",
+          background: "transparent",
           position: "relative",
           overflow: "hidden",
         }}>
@@ -142,7 +143,9 @@ export default function Login() {
           justifyContent: "center",
           alignItems: "center",
           padding: "56px clamp(24px, 5vw, 72px)",
-          background: "#ffffff",
+          background: "rgba(255,255,255,0.12)",
+          backdropFilter: "blur(14px)",
+          WebkitBackdropFilter: "blur(14px)",
           boxSizing: "border-box",
         }}>
           <div style={{ width: "100%", maxWidth: 400 }}>
@@ -150,7 +153,7 @@ export default function Login() {
             {/* Form heading */}
             <div style={{ marginBottom: 32 }}>
               <div style={{
-                fontSize: 11, fontWeight: 700, color: "#22c55e",
+                fontSize: 11, fontWeight: 700, color: "#4ade80",
                 letterSpacing: 1.2, textTransform: "uppercase", marginBottom: 10,
               }}>
                 Secure sign-in
@@ -159,12 +162,13 @@ export default function Login() {
                 margin: "0 0 8px",
                 fontSize: "clamp(1.4rem, 2.5vw, 1.8rem)",
                 fontWeight: 800,
-                color: "#14532d",
+                color: "#ecfdf5",
                 letterSpacing: "-0.025em",
+                textShadow: "0 1px 8px rgba(0,0,0,0.4)",
               }}>
                 Login to Dashboard
               </h2>
-              <p style={{ margin: 0, fontSize: 14, color: "#5b9275", lineHeight: 1.55 }}>
+              <p style={{ margin: 0, fontSize: 14, color: "rgba(187,247,208,0.80)", lineHeight: 1.55 }}>
                 Enter your Helion Tracking credentials to continue.
               </p>
             </div>
@@ -174,7 +178,7 @@ export default function Login() {
               <div style={{ marginBottom: 18 }}>
                 <label htmlFor="login-user" style={{
                   display: "block", fontSize: 13, fontWeight: 700,
-                  color: "#166534", marginBottom: 8,
+                  color: "#bbf7d0", marginBottom: 8,
                 }}>
                   Username
                 </label>
@@ -203,7 +207,7 @@ export default function Login() {
               {/* Password */}
               <div style={{ marginBottom: 6 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                  <label htmlFor="login-pass" style={{ fontSize: 13, fontWeight: 700, color: "#166534" }}>
+                  <label htmlFor="login-pass" style={{ fontSize: 13, fontWeight: 700, color: "#bbf7d0" }}>
                     Password
                   </label>
                   <label style={{
@@ -291,7 +295,7 @@ export default function Login() {
 
               <p style={{
                 marginTop: 20, fontSize: 12,
-                color: "#9ca3af", textAlign: "center", lineHeight: 1.5,
+                color: "rgba(187,247,208,0.55)", textAlign: "center", lineHeight: 1.5,
               }}>
                 Protected access · Authorized personnel only
               </p>
