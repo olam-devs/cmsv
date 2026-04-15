@@ -74,7 +74,10 @@ export default function Login() {
           flexDirection: "column",
           justifyContent: "center",
           padding: "56px clamp(28px, 5vw, 72px)",
-          background: "linear-gradient(160deg, #052e16 0%, #14532d 55%, #166534 100%)",
+          backgroundImage: `linear-gradient(160deg, rgba(5,46,22,0.82) 0%, rgba(20,83,45,0.78) 55%, rgba(22,101,52,0.80) 100%), url(${import.meta.env.BASE_URL}login.png)`,
+          backgroundSize: "cover",
+          backgroundPosition: "center",
+          backgroundRepeat: "no-repeat",
           position: "relative",
           overflow: "hidden",
         }}>
