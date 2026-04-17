@@ -28,6 +28,10 @@ const PORT = process.env.PORT || 3000;
 // ── Bootstrap default admin if empty user store ───────────────────────────
 try { users.ensureDefaultAdmin(); } catch (_) {}
 
+// ── Derive CMSV6 host/port for CSP (must match env, not hardcoded) ────────
+const cmsVideoHost = (process.env.CMSV6_BASE_URL || 'http://13.53.215.88').replace(/^https?:\/\//, '').split(':')[0];
+const cmsVideoPort = process.env.CMSV6_VIDEO_PORT || 6604;
+
 // ── Security & middleware ──────────────────────────────────────────────────
 app.use(helmet({
   contentSecurityPolicy: {
@@ -39,8 +43,8 @@ app.use(helmet({
       imgSrc:      ["'self'", 'data:'],
       // Allow Nominatim for reverse geocoding (location names on map)
       connectSrc:  ["'self'", 'https://nominatim.openstreetmap.org'],
-      // Allow CMSV6 video player iframe (HTTP — do NOT add upgrade-insecure-requests)
-      frameSrc:    ["'self'", 'http://13.53.215.88', 'http://13.53.215.88:6604'],
+      // Allow CMSV6 video player iframe — derived from env at startup
+      frameSrc:    ["'self'", `http://${cmsVideoHost}`, `http://${cmsVideoHost}:${cmsVideoPort}`],
       workerSrc:   ["'self'", 'blob:'],
       objectSrc:   ["'none'"],
       // Note: upgrade-insecure-requests is intentionally omitted —
