@@ -464,7 +464,12 @@ router.get('/cameras/:id/stream', async (req, res) => {
   }
 
   const data = await cms.getCameraStreamUrl(req.params.id, channel, streamType);
-  ok(res, data);
+  const ch1 = data.channel + 1; // data.channel is 0-based; proxy endpoints take 1-based
+  ok(res, {
+    ...data,
+    playerUrl: `/api/video/player?devIdno=${encodeURIComponent(data.devIdno)}&channel=${ch1}&stream=${data.stream}&jsession=${encodeURIComponent(data.jsession)}`,
+    hlsUrl:    `/api/video/hls?devIdno=${encodeURIComponent(data.devIdno)}&channel=${ch1}&stream=${data.stream}&jsession=${encodeURIComponent(data.jsession)}`,
+  });
 });
 
 /** POST /api/cameras/:id/snapshot?channel=1 — Trigger camera snapshot */

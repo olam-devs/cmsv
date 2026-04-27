@@ -2914,7 +2914,6 @@ function MapCameraOverlay({ panels, onClosePanel }) {
               </span>
               <button
                 onClick={() => window.open(
-                  // channel=6 = CMSV6 native all-camera grid; use direct HTTP URL in new tab
                   panel.playerUrl.replace(/channel=\d+/, 'channel=6'),
                   '_blank', 'width=1100,height=720,menubar=no,toolbar=no,location=no'
                 )}

@@ -62,18 +62,29 @@ const distPath = path.join(__dirname, '../../frontend/dist');
 
 // ── CMSV6 player proxy — serves the HTTP player page from our HTTPS origin ───
 // Rewrites all http://cmsHost URLs inside HTML/JS responses to go through
-// /api/video/static (port 80) and /api/video/stream (port 6604) proxies,
+// /api/video/static (web port) and /api/video/stream (port 6604) proxies,
 // so the browser never makes direct HTTP requests from an HTTPS page.
 
+// Returns just the hostname from CMSV6_BASE_URL (strips scheme and port).
 function getCmsHost() {
-  return (process.env.CMSV6_BASE_URL || 'http://13.53.215.88').replace(/^https?:\/\//, '');
+  return (process.env.CMSV6_BASE_URL || 'http://13.53.215.88')
+    .replace(/^https?:\/\//, '').split(':')[0];
+}
+
+// Returns the web port from CMSV6_BASE_URL (e.g. 8080 for http://127.0.0.1:8080).
+function getCmsWebPort() {
+  const base = process.env.CMSV6_BASE_URL || 'http://13.53.215.88';
+  const m = base.match(/:(\d+)(?:\/|$)/);
+  return m ? parseInt(m[1]) : 80;
 }
 
 function rewriteCmsUrls(body, cmsHost) {
   const escaped = cmsHost.replace(/\./g, '\\.');
   return body
-    .replace(new RegExp(`(https?|wss?|ws)://${escaped}:6604`, 'gi'), '/api/video/stream')
-    .replace(new RegExp(`https?://${escaped}(?=[/:])`, 'gi'), '/api/video/static');
+    // Port 6604: match any host — CMSV6 embeds public IP in player HTML regardless of request host
+    .replace(/(?:https?|wss?|ws):\/\/[^/"'\s:]+:6604/gi, '/api/video/stream')
+    // Static assets: match the configured CMS hostname with optional port
+    .replace(new RegExp(`https?://${escaped}(?::\\d+)?(?=[/:])`, 'gi'), '/api/video/static');
 }
 
 function cmsHttpProxy(port, pathPrefix, { streamMode = false } = {}) {
@@ -119,7 +130,7 @@ app.get('/api/video/player', (req, res) => {
   const cmsHost = getCmsHost();
   const playerPath = `/808gps/open/player/video.html?lang=en&devIdno=${devIdno}&channel=${channel}&stream=${stream}&jsession=${jsession}`;
   const opts = {
-    hostname: cmsHost, port: 80,
+    hostname: cmsHost, port: getCmsWebPort(),
     path: playerPath, method: 'GET',
     headers: { 'User-Agent': 'StarLink-Fleet/1.0', host: cmsHost },
     timeout: 10000,
@@ -130,14 +141,12 @@ app.get('/api/video/player', (req, res) => {
     proxyRes.on('end', () => {
       let body = Buffer.concat(chunks).toString('utf8');
       body = rewriteCmsUrls(body, cmsHost);
-      // Intercept dynamic WebSocket/fetch/XHR calls that Jessibuca builds at runtime —
-      // text rewriting can't catch these since the URLs are constructed in JS.
-      // IMPORTANT: WebSocket replacements must keep ws:// protocol, not http://.
+      // Intercept dynamic WebSocket/fetch/XHR calls that Jessibuca builds at runtime.
+      // Matches any host on port 6604 — CMSV6 may embed the public IP, not 127.0.0.1.
       const intercept = `<script>
 (function(){
-  var _cmsHost = '${cmsHost.replace(/\./g,'\\.')}';
-  var _wsRe   = new RegExp('wss?://' + _cmsHost + ':6604','g');
-  var _httpRe = new RegExp('https?://' + _cmsHost + ':6604','g');
+  var _wsRe   = /wss?:\/\/[^/"'\s:]+:6604/g;
+  var _httpRe = /https?:\/\/[^/"'\s:]+:6604/g;
   var _wsBase   = (location.protocol==='https:'?'wss':'ws')+'://'+location.host+'/api/video/stream';
   var _httpBase = location.origin+'/api/video/stream';
   var _WS = window.WebSocket;
@@ -164,8 +173,8 @@ app.get('/api/video/player', (req, res) => {
   pr.end();
 });
 
-/** /api/video/static/* — Proxy port-80 resources (JS, CSS, images) */
-app.use('/api/video/static', cmsHttpProxy(80, '/api/video/static'));
+/** /api/video/static/* — Proxy CMSV6 web port resources (JS, CSS, images) */
+app.use('/api/video/static', cmsHttpProxy(getCmsWebPort(), '/api/video/static'));
 
 /** /api/video/stream/* — Proxy port-6604 video streams (FLV/HLS); streamMode disables timeout */
 app.use('/api/video/stream', cmsHttpProxy(6604, '/api/video/stream', { streamMode: true }));
@@ -175,7 +184,7 @@ app.use('/api/video/stream', cmsHttpProxy(6604, '/api/video/stream', { streamMod
 app.get('/api/video/hls', async (req, res) => {
   try {
     const { devIdno, channel, stream, jsession } = req.query;
-    const host = (process.env.CMSV6_BASE_URL || 'http://13.53.215.88').replace(/^https?:\/\//, '');
+    const host = getCmsHost();
     const port = process.env.CMSV6_VIDEO_PORT || 6604;
     // CMSV6 HLS uses 0-based channel index in the stream filename
     const ch0 = Math.max(0, parseInt(channel || 1) - 1);
@@ -200,7 +209,7 @@ app.get('/api/video/hls', async (req, res) => {
 app.get('/api/video/segment', async (req, res) => {
   try {
     const url = decodeURIComponent(req.query.url || '');
-    const host = (process.env.CMSV6_BASE_URL || 'http://13.53.215.88').replace(/^https?:\/\//, '');
+    const host = getCmsHost();
     if (!url.includes(host)) return res.status(403).end();
     const r = await fetch(url);
     if (!r.ok) return res.status(r.status).end();
