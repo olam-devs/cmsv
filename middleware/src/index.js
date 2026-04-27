@@ -132,53 +132,67 @@ function cmsHttpProxy(port, pathPrefix, { streamMode = false } = {}) {
   };
 }
 
-/** GET /api/video/player — Proxy CMSV6 channel=6 player page at same origin */
+/** GET /api/video/player — Self-contained HLS player (replaces CMSV6 native player proxy).
+ *  Serves our own HTML+hls.js page that pulls the stream via /api/video/hls.
+ *  This avoids all CMSV6 HTML rewriting complexity and mixed-content issues. */
 app.get('/api/video/player', (req, res) => {
-  const { devIdno, channel = 6, stream = 1, jsession } = req.query;
-  const cmsHost = getCmsHost();
-  const playerPath = `/808gps/open/player/video.html?lang=en&devIdno=${devIdno}&channel=${channel}&stream=${stream}&jsession=${jsession}`;
-  const opts = {
-    hostname: cmsHost, port: getCmsWebPort(),
-    path: playerPath, method: 'GET',
-    headers: { 'User-Agent': 'StarLink-Fleet/1.0', host: cmsHost },
-    timeout: 10000,
-  };
-  const pr = http.request(opts, proxyRes => {
-    const chunks = [];
-    proxyRes.on('data', c => chunks.push(c));
-    proxyRes.on('end', () => {
-      let body = Buffer.concat(chunks).toString('utf8');
-      body = rewriteCmsUrls(body, cmsHost);
-      // Intercept dynamic WebSocket/fetch/XHR calls that Jessibuca builds at runtime.
-      // Matches any host on port 6604 — CMSV6 may embed the public IP, not 127.0.0.1.
-      const intercept = `<script>
+  const { devIdno = '', channel = 1, stream = 1, jsession = '' } = req.query;
+  const hlsUrl = `/api/video/hls?devIdno=${encodeURIComponent(devIdno)}&channel=${encodeURIComponent(channel)}&stream=${encodeURIComponent(stream)}&jsession=${encodeURIComponent(jsession)}`;
+  res.set('Content-Type', 'text/html');
+  res.set('Content-Security-Policy', "default-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; media-src *; connect-src *");
+  res.send(`<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Camera ${devIdno} Ch${channel}</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#000;height:100vh;overflow:hidden;font-family:sans-serif}
+video{width:100%;height:100vh;object-fit:contain;background:#000}
+#status{position:fixed;top:10px;left:10px;color:#fff;font-size:12px;
+  background:rgba(0,0,0,.65);padding:4px 10px;border-radius:4px;pointer-events:none}
+</style>
+</head>
+<body>
+<div id="status">Connecting…</div>
+<video id="v" autoplay muted playsinline controls></video>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1/dist/hls.min.js"></script>
+<script>
 (function(){
-  var _wsRe   = /wss?:\/\/[^/"'\s:]+:6604/g;
-  var _httpRe = /https?:\/\/[^/"'\s:]+:6604/g;
-  var _wsBase   = (location.protocol==='https:'?'wss':'ws')+'://'+location.host+'/api/video/stream';
-  var _httpBase = location.origin+'/api/video/stream';
-  var _WS = window.WebSocket;
-  window.WebSocket = function(u,p){
-    if(typeof u==='string'){ u=u.replace(_wsRe,_wsBase).replace(_httpRe,_wsBase); }
-    return new _WS(u,p);
-  };
-  window.WebSocket.prototype = _WS.prototype;
-  var _fetch = window.fetch;
-  window.fetch = function(u,o){ if(typeof u==='string') u=u.replace(_httpRe,_httpBase); return _fetch(u,o); };
-  var _open = XMLHttpRequest.prototype.open;
-  XMLHttpRequest.prototype.open = function(m,u){ if(typeof u==='string') u=u.replace(_httpRe,_httpBase); return _open.call(this,m,u); };
+  var v = document.getElementById('v');
+  var s = document.getElementById('status');
+  var src = '${hlsUrl}';
+  function start() {
+    if (typeof Hls !== 'undefined' && Hls.isSupported()) {
+      var h = new Hls({ lowLatencyMode: true, maxBufferLength: 10, enableWorker: true });
+      h.loadSource(src);
+      h.attachMedia(v);
+      h.on(Hls.Events.MANIFEST_PARSED, function() {
+        s.textContent = '● Live';
+        v.play().catch(function(){});
+      });
+      h.on(Hls.Events.ERROR, function(_, d) {
+        if (d.fatal) s.textContent = 'Stream error: ' + d.details;
+      });
+    } else if (v.canPlayType('application/vnd.apple.mpegurl')) {
+      v.src = src;
+      v.onloadedmetadata = function() { s.textContent = '● Live'; v.play().catch(function(){}); };
+      v.onerror = function() { s.textContent = 'Stream error'; };
+    } else {
+      s.textContent = 'HLS not supported in this browser';
+    }
+  }
+  if (typeof Hls === 'undefined') {
+    var sc = document.createElement('script');
+    sc.src = 'https://cdn.jsdelivr.net/npm/hls.js@1/dist/hls.min.js';
+    sc.onload = start; sc.onerror = start;
+    document.head.appendChild(sc);
+  } else { start(); }
 })();
-</script>`;
-      // Inject base + intercept before any other scripts so Jessibuca picks it up
-      body = body.replace(/<head>/i, `<head><base href="/api/video/static/808gps/open/player/">${intercept}`);
-      res.set('Content-Type', 'text/html');
-      // Permissive CSP for this iframe — Jessibuca's asm.js decoder requires unsafe-eval
-      res.set('Content-Security-Policy', "default-src * 'unsafe-inline' 'unsafe-eval' data: blob:");
-      res.send(body);
-    });
-  });
-  pr.on('error', e => res.status(502).send(`<!-- proxy error: ${e.message} -->`));
-  pr.end();
+</script>
+</body>
+</html>`);
 });
 
 /** /api/video/static/* — Proxy CMSV6 web port resources (JS, CSS, images) */
