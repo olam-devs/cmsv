@@ -83,7 +83,10 @@ function rewriteCmsUrls(body, cmsHost) {
   return body
     // Port 6604: match any host — CMSV6 embeds public IP in player HTML regardless of request host
     .replace(/(?:https?|wss?|ws):\/\/[^/"'\s:]+:6604/gi, '/api/video/stream')
-    // Static assets: match the configured CMS hostname with optional port
+    // Absolute CMSV6 resource paths — <base href> only rewrites relative paths, not these
+    .replace(/(["'(=\s])\/808gps\//g, '$1/api/video/static/808gps/')
+    .replace(/(["'(=\s])\/js\//g, '$1/api/video/static/js/')
+    // Full http://host URLs to CMSV6
     .replace(new RegExp(`https?://${escaped}(?::\\d+)?(?=[/:])`, 'gi'), '/api/video/static');
 }
 
