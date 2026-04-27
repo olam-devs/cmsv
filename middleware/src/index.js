@@ -112,7 +112,10 @@ function cmsHttpProxy(port, pathPrefix, { streamMode = false } = {}) {
         const chunks = [];
         proxyRes.on('data', c => chunks.push(c));
         proxyRes.on('end', () => {
-          const body = rewriteCmsUrls(Buffer.concat(chunks).toString('utf8'), cmsHost);
+          const raw = Buffer.concat(chunks).toString('utf8');
+          // Only rewrite URLs in HTML — JS/JSON already load via /api/video/static and
+          // rewriting them causes double-rewrite bugs in dynamically-loaded scripts
+          const body = /text\/html/.test(ct) ? rewriteCmsUrls(raw, cmsHost) : raw;
           delete h['content-length'];
           res.writeHead(proxyRes.statusCode || 200, h);
           res.end(body);
@@ -221,6 +224,26 @@ app.get('/api/video/segment', async (req, res) => {
     const buf = await r.arrayBuffer();
     res.send(Buffer.from(buf));
   } catch (e) { res.status(502).end(); }
+});
+
+// ── CMSV6 internal API proxy (before auth — player iframe calls these from our origin) ──
+// The CMSV6 player page makes requests to /api/config/... and similar paths.
+// Since the player loads from heliontracking.com, those hit our server — proxy them to CMSV6.
+app.use('/api/config', (req, res) => {
+  const cmsHost = getCmsHost();
+  const pr = http.request({
+    hostname: cmsHost, port: getCmsWebPort(),
+    path: '/api/config' + req.url, method: req.method,
+    headers: { ...req.headers, host: cmsHost },
+    timeout: 10000,
+  }, proxyRes => {
+    const h = { ...proxyRes.headers };
+    delete h['x-frame-options']; delete h['content-security-policy'];
+    res.writeHead(proxyRes.statusCode || 200, h);
+    proxyRes.pipe(res);
+  });
+  pr.on('error', () => { if (!res.headersSent) res.status(502).end(); });
+  req.pipe(pr);
 });
 
 // ── Map tile proxy (before rate limiter — tiles are high-volume image requests) ──
