@@ -139,7 +139,7 @@ app.get('/api/video/player', (req, res) => {
   const { devIdno = '', channel = 1, stream = 1, jsession = '' } = req.query;
   const hlsUrl = `/api/video/hls?devIdno=${encodeURIComponent(devIdno)}&channel=${encodeURIComponent(channel)}&stream=${encodeURIComponent(stream)}&jsession=${encodeURIComponent(jsession)}`;
   res.set('Content-Type', 'text/html');
-  res.set('Content-Security-Policy', "default-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; media-src *; connect-src *");
+  res.set('Content-Security-Policy', "default-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; media-src * blob:; connect-src *");
   res.send(`<!DOCTYPE html>
 <html>
 <head>
