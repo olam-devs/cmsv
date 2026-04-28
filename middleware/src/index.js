@@ -139,7 +139,7 @@ app.get('/api/video/player', (req, res) => {
   const { devIdno = '', channel = 1, stream = 1, jsession = '' } = req.query;
   const hlsUrl = `/api/video/hls?devIdno=${encodeURIComponent(devIdno)}&channel=${encodeURIComponent(channel)}&stream=${encodeURIComponent(stream)}&jsession=${encodeURIComponent(jsession)}`;
   res.set('Content-Type', 'text/html');
-  res.set('Content-Security-Policy', "default-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; media-src * blob:; connect-src *");
+  res.set('Content-Security-Policy', "default-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; media-src * blob:; worker-src blob:; connect-src *");
   res.send(`<!DOCTYPE html>
 <html>
 <head>
@@ -175,7 +175,7 @@ video{width:100%;height:100vh;object-fit:contain;background:#000}
   function tryHls() {
     if (hlsInst) { try { hlsInst.destroy(); } catch(_){} hlsInst = null; }
     hlsInst = new Hls({
-      lowLatencyMode: true, maxBufferLength: 15, enableWorker: true,
+      lowLatencyMode: true, maxBufferLength: 15, enableWorker: false,
       manifestLoadingTimeOut: 12000, manifestLoadingMaxRetry: 2,
       manifestLoadingRetryDelay: 1500,
     });
