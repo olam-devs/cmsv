@@ -544,7 +544,7 @@ export default function FleetShell() {
           gridRow: "2",
           gridColumn: narrow ? "1" : "2",
           minHeight: 0,
-          overflow: "hidden",
+          overflow: "auto",
           display: "flex",
           flexDirection: "column",
           background: t.bg,

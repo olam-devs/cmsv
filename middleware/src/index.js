@@ -151,38 +151,66 @@ app.get('/api/video/player', (req, res) => {
 body{background:#000;height:100vh;overflow:hidden;font-family:sans-serif}
 video{width:100%;height:100vh;object-fit:contain;background:#000}
 #status{position:fixed;top:10px;left:10px;color:#fff;font-size:12px;
-  background:rgba(0,0,0,.65);padding:4px 10px;border-radius:4px;pointer-events:none}
+  background:rgba(0,0,0,.7);padding:5px 12px;border-radius:6px;pointer-events:none}
+#retrybtn{position:fixed;top:10px;right:10px;color:#fff;font-size:12px;font-family:inherit;
+  background:rgba(99,102,241,.8);border:none;padding:6px 14px;border-radius:6px;
+  cursor:pointer;display:none}
 </style>
 </head>
 <body>
 <div id="status">Connecting…</div>
+<button id="retrybtn" onclick="location.reload()">⟳ Retry</button>
 <video id="v" autoplay muted playsinline controls></video>
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1/dist/hls.min.js"></script>
 <script>
 (function(){
   var v = document.getElementById('v');
   var s = document.getElementById('status');
+  var btn = document.getElementById('retrybtn');
   var src = '${hlsUrl}';
+  var retries = 0;
+  var MAX = 6;
+  var hlsInst = null;
+
+  function tryHls() {
+    if (hlsInst) { try { hlsInst.destroy(); } catch(_){} hlsInst = null; }
+    hlsInst = new Hls({
+      lowLatencyMode: true, maxBufferLength: 15, enableWorker: true,
+      manifestLoadingTimeOut: 12000, manifestLoadingMaxRetry: 2,
+      manifestLoadingRetryDelay: 1500,
+    });
+    hlsInst.loadSource(src);
+    hlsInst.attachMedia(v);
+    hlsInst.on(Hls.Events.MANIFEST_PARSED, function() {
+      s.textContent = '● Live'; btn.style.display = 'none';
+      v.play().catch(function(){});
+    });
+    hlsInst.on(Hls.Events.ERROR, function(_, d) {
+      if (!d.fatal) return;
+      if (retries < MAX) {
+        retries++;
+        s.textContent = 'Connecting… (' + retries + '/' + MAX + ')';
+        btn.style.display = '';
+        setTimeout(tryHls, 2500);
+      } else {
+        s.textContent = 'Stream unavailable: ' + d.details;
+        btn.style.display = '';
+      }
+    });
+  }
+
   function start() {
     if (typeof Hls !== 'undefined' && Hls.isSupported()) {
-      var h = new Hls({ lowLatencyMode: true, maxBufferLength: 10, enableWorker: true });
-      h.loadSource(src);
-      h.attachMedia(v);
-      h.on(Hls.Events.MANIFEST_PARSED, function() {
-        s.textContent = '● Live';
-        v.play().catch(function(){});
-      });
-      h.on(Hls.Events.ERROR, function(_, d) {
-        if (d.fatal) s.textContent = 'Stream error: ' + d.details;
-      });
+      tryHls();
     } else if (v.canPlayType('application/vnd.apple.mpegurl')) {
       v.src = src;
       v.onloadedmetadata = function() { s.textContent = '● Live'; v.play().catch(function(){}); };
-      v.onerror = function() { s.textContent = 'Stream error'; };
+      v.onerror = function() { s.textContent = 'Stream error (native)'; btn.style.display = ''; };
     } else {
       s.textContent = 'HLS not supported in this browser';
     }
   }
+
   if (typeof Hls === 'undefined') {
     var sc = document.createElement('script');
     sc.src = 'https://cdn.jsdelivr.net/npm/hls.js@1/dist/hls.min.js';
