@@ -92,7 +92,7 @@ function rewriteCmsUrls(body, cmsHost) {
     .replace(new RegExp(`https?://${escaped}(?::\\d+)?(?=[/:])`, 'gi'), '/api/video/static');
 }
 
-function cmsHttpProxy(port, pathPrefix, { streamMode = false } = {}) {
+function cmsHttpProxy(port, pathPrefix, { streamMode = false, noRewrite = false } = {}) {
   return (req, res) => {
     const cmsHost = getCmsHost();
     const urlPath = req.url.replace(pathPrefix, '') || '/';
@@ -117,7 +117,7 @@ function cmsHttpProxy(port, pathPrefix, { streamMode = false } = {}) {
           const raw = Buffer.concat(chunks).toString('utf8');
           // Only rewrite URLs in HTML — JS/JSON already load via /api/video/static and
           // rewriting them causes double-rewrite bugs in dynamically-loaded scripts
-          const body = /text\/html/.test(ct) ? rewriteCmsUrls(raw, cmsHost) : raw;
+          const body = (!noRewrite && /text\/html/.test(ct)) ? rewriteCmsUrls(raw, cmsHost) : raw;
           delete h['content-length'];
           res.writeHead(proxyRes.statusCode || 200, h);
           res.end(body);
@@ -133,32 +133,25 @@ function cmsHttpProxy(port, pathPrefix, { streamMode = false } = {}) {
 }
 
 /** GET /api/video/player — Proxies the CMSV6 native Jessibuca player (handles H.265).
- *  Fetches the CMSV6 player HTML, rewrites static asset src/href attributes, then
- *  injects a JS shim that intercepts WebSocket/fetch/XHR at runtime so all traffic
- *  goes through our HTTPS proxies — no mixed content, no H.265 codec errors. */
+ *  /808gps/* is now proxied at its original path, so all relative script URLs in the
+ *  player HTML resolve correctly without any rewriting. We only inject a WebSocket
+ *  shim so Jessibuca's ws:// connections go through our wss: proxy. */
 app.get('/api/video/player', async (req, res) => {
   const { devIdno = '', channel = 1, stream = 1, jsession = '' } = req.query;
   const host    = getCmsHost();
   const webPort = getCmsWebPort();
 
-  // JS shim injected into the CMSV6 player page <head>.
-  // Intercepts WebSocket → /api/video/stream, fetch/XHR → /api/video/static.
-  // This handles all dynamic URL construction inside Jessibuca without regex-rewriting JS.
+  // Shim: intercepts WebSocket only — all static assets load via the /808gps/ proxy
   const shim = `<script>
 (function(){
-  var H = location.host;
-  var WS_PFX = (location.protocol==='https:'?'wss://':'ws://') + H + '/api/video/stream';
-  var ST_PFX = '/api/video/static';
-  function rwWs(u){ return typeof u==='string'&&/^wss?:\\/\\//.test(u) ? WS_PFX+u.replace(/^wss?:\\/\\/[^\\/]*/,'') : u; }
-  function rwHttp(u){ return typeof u==='string'&&/^https?:\\/\\//.test(u) ? ST_PFX+u.replace(/^https?:\\/\\/[^\\/]*/,'') : u; }
   var NW=window.WebSocket;
-  window.WebSocket=function(u,p){u=rwWs(u);return p?new NW(u,p):new NW(u);};
+  window.WebSocket=function(u,p){
+    if(typeof u==='string'&&/^wss?:\\/\\//.test(u))
+      u=(location.protocol==='https:'?'wss://':'ws://')+location.host+'/api/video/stream'+u.replace(/^wss?:\\/\\/[^\\/]*/,'');
+    return p?new NW(u,p):new NW(u);
+  };
   Object.assign(window.WebSocket,{CONNECTING:0,OPEN:1,CLOSING:2,CLOSED:3});
   window.WebSocket.prototype=NW.prototype;
-  var NF=window.fetch;
-  window.fetch=function(u,o){return NF(rwHttp(typeof u==='string'?u:u),o);};
-  var NX=window.XMLHttpRequest;
-  window.XMLHttpRequest=function(){var x=new NX(),oo=x.open.bind(x);x.open=function(m,u){return oo(m,rwHttp(u));};return x;};
 })();
 </script>`;
 
@@ -168,14 +161,11 @@ app.get('/api/video/player', async (req, res) => {
     if (!r.ok) throw new Error(`CMSV6 returned ${r.status}`);
     let html = await r.text();
 
-    // Rewrite static src/href/action attributes in HTML only (not JS string content)
-    html = rewriteCmsUrls(html, host);
-
-    // Inject shim right after <head> so it runs before any page scripts
+    // Inject WS shim before any other scripts — no URL rewriting needed since
+    // /808gps/ paths are now served at their original prefix by Express
     html = html.replace(/(<head[^>]*>)/i, '$1' + shim);
 
     res.set('Content-Type', 'text/html; charset=utf-8');
-    // Jessibuca needs unsafe-eval for WebAssembly compilation
     res.set('Content-Security-Policy',
       "default-src 'self' 'unsafe-inline' 'unsafe-eval'; " +
       "connect-src * wss: ws:; media-src * blob:; worker-src blob: 'self'; " +
@@ -211,6 +201,11 @@ video{width:100%;height:100vh;object-fit:contain}
 })();</script></body></html>`);
   }
 });
+
+/** /808gps/* — Proxy CMSV6 web server at its native path prefix.
+ *  Serving at the original path means all relative script/asset URLs inside the
+ *  CMSV6 player HTML resolve correctly without any rewriting. */
+app.use('/808gps', cmsHttpProxy(getCmsWebPort(), '/808gps', { noRewrite: true }));
 
 /** /api/video/static/* — Proxy CMSV6 web port resources (JS, CSS, images) */
 app.use('/api/video/static', cmsHttpProxy(getCmsWebPort(), '/api/video/static'));
