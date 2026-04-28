@@ -202,10 +202,12 @@ video{width:100%;height:100vh;object-fit:contain}
   }
 });
 
-/** /808gps/* — Proxy CMSV6 web server at its native path prefix.
- *  Serving at the original path means all relative script/asset URLs inside the
- *  CMSV6 player HTML resolve correctly without any rewriting. */
+/** /808gps/* and /js/* — Proxy CMSV6 web server at its native path prefixes.
+ *  Serving at the original paths means all script/asset URLs in the CMSV6
+ *  player HTML resolve correctly without any rewriting.
+ *  /js/public.js sets the `tv` version variable that lang_fun.js needs. */
 app.use('/808gps', cmsHttpProxy(getCmsWebPort(), '/808gps', { noRewrite: true }));
+app.use('/js',     cmsHttpProxy(getCmsWebPort(), '/js',     { noRewrite: true }));
 
 /** /api/video/static/* — Proxy CMSV6 web port resources (JS, CSS, images) */
 app.use('/api/video/static', cmsHttpProxy(getCmsWebPort(), '/api/video/static'));
