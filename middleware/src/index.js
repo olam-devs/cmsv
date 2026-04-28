@@ -132,74 +132,101 @@ function cmsHttpProxy(port, pathPrefix, { streamMode = false, noRewrite = false 
   };
 }
 
-/** GET /api/video/player — Proxies the CMSV6 native Jessibuca player (handles H.265).
- *  /808gps/* is now proxied at its original path, so all relative script URLs in the
- *  player HTML resolve correctly without any rewriting. We only inject a WebSocket
- *  shim so Jessibuca's ws:// connections go through our wss: proxy. */
-app.get('/api/video/player', async (req, res) => {
+/** GET /api/video/player — Standalone Jessibuca player for H.265 CMSV6 streams.
+ *  Loads only the Jessibuca JS binary from the CMSV6 server (tries 3 known paths).
+ *  Zero dependency on lang_fun.js / public.js / swfobject / any CMSV6 HTML. */
+app.get('/api/video/player', (req, res) => {
   const { devIdno = '', channel = 1, stream = 1, jsession = '' } = req.query;
-  const host    = getCmsHost();
-  const webPort = getCmsWebPort();
+  const ch0 = Math.max(0, parseInt(channel) - 1);
+  // CMSV6 WebSocket FLV — params use capital-case keys as the 808GPS protocol requires
+  const wsPath = `/api/video/stream/?devIdno=${encodeURIComponent(devIdno)}&Chn=${ch0}&Stream=${stream}&jsession=${encodeURIComponent(jsession)}`;
 
-  // Shim: intercepts WebSocket only — all static assets load via the /808gps/ proxy
-  const shim = `<script>
+  res.set('Content-Type', 'text/html; charset=utf-8');
+  res.set('Content-Security-Policy',
+    "default-src 'self' 'unsafe-inline' 'unsafe-eval'; " +
+    "connect-src * wss: ws:; media-src * blob:; worker-src blob: 'self'; img-src * data: blob:;"
+  );
+  res.send(`<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Camera ${devIdno} Ch${channel}</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#000;height:100vh;overflow:hidden;font-family:sans-serif}
+#container{width:100%;height:100vh;background:#000}
+#status{position:fixed;top:10px;left:10px;color:#fff;font-size:12px;
+  background:rgba(0,0,0,.75);padding:5px 12px;border-radius:6px;z-index:99;pointer-events:none}
+#retrybtn{position:fixed;top:10px;right:10px;color:#fff;font-size:12px;font-family:inherit;
+  background:rgba(99,102,241,.8);border:none;padding:6px 14px;border-radius:6px;
+  cursor:pointer;display:none;z-index:99}
+</style>
+</head>
+<body>
+<div id="status">Loading player…</div>
+<button id="retrybtn" onclick="location.reload()">⟳ Retry</button>
+<div id="container"></div>
+<script>
 (function(){
-  var NW=window.WebSocket;
-  window.WebSocket=function(u,p){
-    if(typeof u==='string'&&/^wss?:\\/\\//.test(u))
-      u=(location.protocol==='https:'?'wss://':'ws://')+location.host+'/api/video/stream'+u.replace(/^wss?:\\/\\/[^\\/]*/,'');
-    return p?new NW(u,p):new NW(u);
-  };
-  Object.assign(window.WebSocket,{CONNECTING:0,OPEN:1,CLOSING:2,CLOSED:3});
-  window.WebSocket.prototype=NW.prototype;
+  var s = document.getElementById('status');
+  var btn = document.getElementById('retrybtn');
+  var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  var wsUrl = proto + '//' + location.host + '${wsPath}';
+
+  function startPlayer(Jessibuca) {
+    s.textContent = 'Connecting…';
+    try {
+      var j = new Jessibuca({
+        container: document.getElementById('container'),
+        videoBuffer: 0.2,
+        isResize: true,
+        rotate: 0,
+        debug: false,
+        isFullResize: true,
+        hasAudio: true,
+        loadingText: 'Connecting…',
+      });
+      function on(ev, fn) {
+        if (j.on) j.on(ev, fn);
+        else if (j.addEventListener) j.addEventListener(ev, fn);
+      }
+      on('play',    function()  { s.textContent = '● Live'; });
+      on('error',   function(e) { s.textContent = 'Stream error: ' + (e || ''); btn.style.display = ''; });
+      on('timeout', function()  { s.textContent = 'Stream timeout'; btn.style.display = ''; });
+      j.play(wsUrl);
+    } catch(e) {
+      s.textContent = 'Player init error: ' + e.message;
+      btn.style.display = '';
+    }
+  }
+
+  // Try Jessibuca from known CMSV6 paths — no external CDN dependency
+  var paths = [
+    '/808gps/jessibuca/jessibuca.js',
+    '/808gps/open/player/jessibuca.js',
+    '/808gps/open/player/jessibuca/jessibuca.js',
+  ];
+  var idx = 0;
+  function tryNext() {
+    if (idx >= paths.length) {
+      s.textContent = 'Jessibuca not found on server (tried ' + paths.length + ' paths)';
+      btn.style.display = '';
+      return;
+    }
+    var src = paths[idx++];
+    s.textContent = 'Loading player (' + idx + '/' + paths.length + ')…';
+    var el = document.createElement('script');
+    el.src = src;
+    el.onload  = function() { typeof Jessibuca !== 'undefined' ? startPlayer(Jessibuca) : tryNext(); };
+    el.onerror = tryNext;
+    document.head.appendChild(el);
+  }
+  tryNext();
 })();
-</script>`;
-
-  try {
-    const pageUrl = `http://${host}:${webPort}/808gps/open/player/video.html?lang=en&devIdno=${encodeURIComponent(devIdno)}&channel=${encodeURIComponent(channel)}&stream=${encodeURIComponent(stream)}&jsession=${encodeURIComponent(jsession)}`;
-    const r = await fetch(pageUrl, { timeout: 8000 });
-    if (!r.ok) throw new Error(`CMSV6 returned ${r.status}`);
-    let html = await r.text();
-
-    // Inject WS shim before any other scripts — no URL rewriting needed since
-    // /808gps/ paths are now served at their original prefix by Express
-    html = html.replace(/(<head[^>]*>)/i, '$1' + shim);
-
-    res.set('Content-Type', 'text/html; charset=utf-8');
-    res.set('Content-Security-Policy',
-      "default-src 'self' 'unsafe-inline' 'unsafe-eval'; " +
-      "connect-src * wss: ws:; media-src * blob:; worker-src blob: 'self'; " +
-      "img-src * data: blob:;"
-    );
-    res.removeHeader('X-Frame-Options');
-    res.send(html);
-  } catch (e) {
-    // Fallback: self-contained HLS player (works if stream is H.264)
-    logger.warn(`CMSV6 player proxy failed (${e.message}), serving HLS fallback`);
-    const hlsUrl = `/api/video/hls?devIdno=${encodeURIComponent(devIdno)}&channel=${encodeURIComponent(channel)}&stream=${encodeURIComponent(stream)}&jsession=${encodeURIComponent(jsession)}`;
-    res.set('Content-Type', 'text/html');
-    res.set('Content-Security-Policy', "default-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; media-src * blob:; worker-src blob:; connect-src *");
-    res.send(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<style>*{margin:0;padding:0;box-sizing:border-box}body{background:#000;height:100vh;overflow:hidden;font-family:sans-serif}
-video{width:100%;height:100vh;object-fit:contain}
-#s{position:fixed;top:10px;left:10px;color:#fff;font-size:12px;background:rgba(0,0,0,.7);padding:5px 12px;border-radius:6px}
-#rb{position:fixed;top:10px;right:10px;color:#fff;font-size:12px;font-family:inherit;background:rgba(99,102,241,.8);border:none;padding:6px 14px;border-radius:6px;cursor:pointer;display:none}
-</style></head><body>
-<div id="s">Connecting…</div><button id="rb" onclick="location.reload()">⟳ Retry</button>
-<video id="v" autoplay muted playsinline controls></video>
-<script src="https://cdn.jsdelivr.net/npm/hls.js@1/dist/hls.min.js"></script>
-<script>(function(){
-  var v=document.getElementById('v'),s=document.getElementById('s'),rb=document.getElementById('rb');
-  var src='${hlsUrl}',retries=0,MAX=6,h=null;
-  function go(){if(h){try{h.destroy();}catch(_){}h=null;}
-    h=new Hls({lowLatencyMode:true,maxBufferLength:15,enableWorker:false,manifestLoadingTimeOut:12000,manifestLoadingMaxRetry:2,manifestLoadingRetryDelay:1500});
-    h.loadSource(src);h.attachMedia(v);
-    h.on(Hls.Events.MANIFEST_PARSED,function(){s.textContent='● Live';rb.style.display='none';v.play().catch(function(){});});
-    h.on(Hls.Events.ERROR,function(_,d){if(!d.fatal)return;if(retries++<MAX){s.textContent='Connecting… ('+retries+'/'+MAX+')';rb.style.display='';setTimeout(go,2500);}else{s.textContent='Stream error: '+d.details;rb.style.display='';}});
-  }
-  if(typeof Hls==='undefined'){var sc=document.createElement('script');sc.src='https://cdn.jsdelivr.net/npm/hls.js@1/dist/hls.min.js';sc.onload=go;document.head.appendChild(sc);}else go();
-})();</script></body></html>`);
-  }
+</script>
+</body>
+</html>`);
 });
 
 /** /808gps/* and /js/* — Proxy CMSV6 web server at its native path prefixes.
