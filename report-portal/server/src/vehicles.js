@@ -1,20 +1,38 @@
 /**
  * Vehicle list: CMSV6 HTTP API (primary), helion-middleware fleet API (fallback).
- * Daily report rows still use CMS for GPS/fuel/track per vehicle.
+ * Uses Node fetch (no axios) so VPS deploy does not need an extra package.
  */
 const path = require('path');
-const axios = require('axios');
 
 const cms = require(path.join(__dirname, '../../../middleware/src/services/cmsv6.service'));
+
+async function fetchJson(url, headers = {}, timeoutMs = 60000) {
+  const ctrl = new AbortController();
+  const tid = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { headers, signal: ctrl.signal });
+    const text = await res.text();
+    let json = {};
+    try {
+      json = text ? JSON.parse(text) : {};
+    } catch {
+      throw new Error(`Invalid JSON from ${url}`);
+    }
+    if (!res.ok) {
+      throw new Error(json.message || `HTTP ${res.status}`);
+    }
+    return json;
+  } finally {
+    clearTimeout(tid);
+  }
+}
 
 async function fromMiddlewareFleet() {
   const base = String(process.env.HELION_API_BASE || 'http://127.0.0.1:3000/api').replace(/\/$/, '');
   const key = process.env.MIDDLEWARE_API_KEY || process.env.API_KEY || '';
-  const res = await axios.get(`${base}/fleet/vehicles`, {
-    headers: key ? { 'x-api-key': key } : {},
-    timeout: 60000,
-  });
-  const list = res.data?.data ?? res.data ?? [];
+  const headers = key ? { 'x-api-key': key } : {};
+  const json = await fetchJson(`${base}/fleet/vehicles`, headers);
+  const list = json.data ?? json ?? [];
   if (!Array.isArray(list)) throw new Error('Invalid fleet/vehicles response from middleware');
   return list
     .map((v) => ({
