@@ -15,6 +15,21 @@ const cms = require(path.join(MW, 'services/cmsv6.service'));
 const ok = (res, data, meta = {}) => res.json({ success: true, ...meta, data });
 const err = (res, msg, status = 400) => res.status(status).json({ success: false, message: msg });
 
+/** Load fleet from CMSV6 — do not hide failures (empty list looked like “no vehicles”). */
+async function loadVehicles(res) {
+  try {
+    const vehicles = await cms.getVehicles();
+    return vehicles.filter((v) => v.devIdno);
+  } catch (e) {
+    err(
+      res,
+      `CMS connection failed: ${e.message}. Check CMSV6_USERNAME and CMSV6_PASSWORD in report-portal/server/.env (same as C:\\helion\\middleware\\.env).`,
+      503,
+    );
+    return null;
+  }
+}
+
 router.post('/auth/login', (req, res) => {
   const { username, password } = req.body || {};
   if (!verifyLogin(username, password)) {
@@ -34,13 +49,28 @@ router.use(requireReportUser);
 
 async function resolveDevIdno(id) {
   const s = String(id || '').trim();
-  const vehicles = await cms.getVehicles().catch(() => []);
+  const vehicles = await cms.getVehicles();
   const hit = vehicles.find((v) => v.devIdno === s || v.plate === s || v.nm === s);
   return hit?.devIdno || s;
 }
 
+router.get('/diagnostics/cms', async (req, res) => {
+  try {
+    const vehicles = await cms.getVehicles();
+    ok(res, {
+      vehicleCount: vehicles.length,
+      withDevice: vehicles.filter((v) => v.devIdno).length,
+      cmsv6BaseUrl: process.env.CMSV6_BASE_URL,
+      cmsv6User: process.env.CMSV6_USERNAME,
+    });
+  } catch (e) {
+    err(res, `CMS: ${e.message}`, 503);
+  }
+});
+
 router.get('/vehicles', async (req, res) => {
-  const vehicles = await cms.getVehicles().catch(() => []);
+  const vehicles = await loadVehicles(res);
+  if (vehicles == null) return;
   ok(res, vehicles.map((v) => ({
     devIdno: v.devIdno,
     plate: v.plate || v.nm || v.devIdno,
@@ -51,7 +81,8 @@ router.get('/vehicles', async (req, res) => {
 router.get('/daily-log/report', async (req, res) => {
   const date = (req.query.date || req.query.from || dailyLog.todayStr()).slice(0, 10);
   const dropThresholdL = parseFloat(req.query.dropThresholdL) || dailyLog.getSettings().defaultDropThresholdL;
-  let vehicles = await cms.getVehicles().catch(() => []);
+  let vehicles = await loadVehicles(res);
+  if (vehicles == null) return;
   const filterList = String(req.query.vehicles || '').trim();
   if (filterList) {
     const parts = new Set(filterList.split(',').map((s) => s.trim()).filter(Boolean));
@@ -65,7 +96,8 @@ router.get('/daily-log/report', async (req, res) => {
 router.get('/daily-log/report/export', async (req, res) => {
   const date = (req.query.date || dailyLog.todayStr()).slice(0, 10);
   const dropThresholdL = parseFloat(req.query.dropThresholdL) || dailyLog.getSettings().defaultDropThresholdL;
-  const vehicles = await cms.getVehicles().catch(() => []);
+  const vehicles = await loadVehicles(res);
+  if (vehicles == null) return;
   const forceRefresh = req.query.refresh === '1' || req.query.refresh === 'true';
   const report = await dailyLog.buildDailyFleetReport(vehicles, date, dropThresholdL, { forceRefresh });
   const csv = dailyLog.rowsToCsv(report);
@@ -83,7 +115,12 @@ router.patch('/daily-log/report/:id', async (req, res) => {
   const devIdno = await resolveDevIdno(req.params.id);
   const date = (req.query.date || req.body?.reportDate || dailyLog.todayStr()).slice(0, 10);
   const { camerasOk, notes, bundlePurchasedDate } = req.body || {};
-  const vehicles = await cms.getVehicles().catch(() => []);
+  let vehicles;
+  try {
+    vehicles = await cms.getVehicles();
+  } catch (e) {
+    return err(res, `CMS connection failed: ${e.message}`, 503);
+  }
   const v = vehicles.find((x) => x.devIdno === devIdno) || { devIdno, plate: req.params.id };
   const saved = dailyLog.saveManualInspection(
     devIdno,
@@ -98,7 +135,12 @@ router.patch('/daily-log/report/:id', async (req, res) => {
 router.get('/daily-log/report/:id/live', async (req, res) => {
   const run = { devIdno: await resolveDevIdno(req.params.id) };
   const date = (req.query.date || dailyLog.todayStr()).slice(0, 10);
-  const vehicles = await cms.getVehicles().catch(() => []);
+  let vehicles;
+  try {
+    vehicles = await cms.getVehicles();
+  } catch (e) {
+    return err(res, `CMS connection failed: ${e.message}`, 503);
+  }
   const v = vehicles.find((x) => x.devIdno === run.devIdno) || { devIdno: run.devIdno };
   const row = await dailyLog.buildInspectionForVehicle(v, date, dailyLog.getSettings().defaultDropThresholdL);
   const statuses = await cms.getAllGPS();

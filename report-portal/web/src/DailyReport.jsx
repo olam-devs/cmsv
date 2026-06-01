@@ -371,7 +371,15 @@ export default function DailyReport({ username }) {
           ) : !filteredRows.length && !loading && !reportRaw ? (
             <Empty message="No data yet. Click Refresh from CMS." />
           ) : filteredRows.length === 0 && reportRaw ? (
-            <Empty message="No vehicles match search." />
+            <Empty
+              message={
+                search.trim()
+                  ? "No vehicles match search — clear the search box."
+                  : (reportRaw.summary?.total ?? 0) === 0
+                    ? "CMS returned 0 vehicles. Check CMS password in report-portal/server/.env, then click Refresh from CMS."
+                    : "No rows to display."
+              }
+            />
           ) : (
             <div style={{ overflowX: "auto", opacity: loading ? 0.65 : 1 }}>
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
