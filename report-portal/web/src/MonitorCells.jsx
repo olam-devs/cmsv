@@ -46,8 +46,11 @@ export function FuelCell({ row }) {
     <MonitorCell
       display={d}
       primary={primary}
-      secondary={d?.ageLabel}
-      title={d?.updatedAt ? `Updated ${d.updatedAt}` : "No fuel update"}
+      title={
+        d?.updatedAt
+          ? `Fuel ${d.updatedAt}${d?.ageLabel ? ` (${d.ageLabel} ago)` : ""}`
+          : "No fuel update"
+      }
     />
   );
 }
@@ -59,25 +62,32 @@ export function GprsCell({ row }) {
     <MonitorCell
       display={d}
       primary={loc}
-      secondary={d?.ageLabel}
-      title={d?.updatedAt ? `GPS ${d.updatedAt}` : "No GPS"}
+      title={d?.updatedAt ? `GPS ${d.updatedAt}${d?.ageLabel ? ` (${d.ageLabel} ago)` : ""}` : "No GPS"}
     />
   );
 }
 
 export function AntennaCell({ row }) {
   const d = row.antennaDisplay;
+  const fuel = row.fuelDisplay;
+  const gprs = row.gprsDisplay;
   const primary = d?.neverUpdated
     ? "Never updated"
     : !d?.online
-      ? `Offline ${d?.ageLabel || ""}`
+      ? "Offline"
       : "Online";
+  const timeParts = [];
+  if (fuel?.ageLabel && fuel.ageLabel !== "Never") timeParts.push(`Fuel ${fuel.ageLabel}`);
+  if (gprs?.ageLabel && gprs.ageLabel !== "Never") timeParts.push(`GPS ${gprs.ageLabel}`);
+  const secondary = timeParts.length ? timeParts.join(" · ") : null;
   return (
     <MonitorCell
       display={d}
       primary={primary}
-      secondary={!d?.online && !d?.neverUpdated ? "not reporting" : null}
-      title="Antenna / connectivity"
+      secondary={secondary}
+      title={[fuel?.updatedAt && `Fuel: ${fuel.updatedAt}`, gprs?.updatedAt && `GPS: ${gprs.updatedAt}`]
+        .filter(Boolean)
+        .join(" · ") || "Antenna / connectivity"}
     />
   );
 }

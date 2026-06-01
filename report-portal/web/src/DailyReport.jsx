@@ -5,9 +5,9 @@ import { apiFetch, API_BASE, getToken, logout } from "./api.js";
 import { FuelCell, GprsCell, AntennaCell } from "./MonitorCells.jsx";
 import { cameraStatusFromRow, CamCellLabel } from "./CameraEditor.jsx";
 import VehicleEditDrawer from "./VehicleEditDrawer.jsx";
+import AnalyticsPanel from "./AnalyticsPanel.jsx";
 
 const THRESHOLD_OPTIONS = [5, 10, 15, 20, 25, 30, 40, 50];
-const FUEL_DROP_FILTER = [5, 10, 20, 30, 50];
 const LIVE_REFRESH_MS = 30000;
 const fuelTodayIso = () => new Date().toISOString().slice(0, 10);
 
@@ -28,7 +28,8 @@ export default function DailyReport({ username }) {
   const today = fuelTodayIso();
   const [vehicles, setVehicles] = useState([]);
   const [search, setSearch] = useState("");
-  const [reportDate, setReportDate] = useState(today);
+  const [dateFrom, setDateFrom] = useState(today);
+  const [dateTo, setDateTo] = useState(today);
   const [dropThreshold, setDropThreshold] = useState(20);
   const [reportRaw, setReportRaw] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -42,7 +43,8 @@ export default function DailyReport({ username }) {
   const [saving, setSaving] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [liveTick, setLiveTick] = useState(null);
-  const [analyticsOpen, setAnalyticsOpen] = useState(false);
+  const [analyticsView, setAnalyticsView] = useState("closed");
+  const [analyticsLoading, setAnalyticsLoading] = useState(false);
   const [fuelDropMinL, setFuelDropMinL] = useState(20);
   const [customFuelMin, setCustomFuelMin] = useState("");
   const [fuelDropHits, setFuelDropHits] = useState([]);
@@ -69,6 +71,14 @@ export default function DailyReport({ username }) {
     return ids;
   }, [vehicles, search]);
 
+  const periodLabel = useMemo(() => {
+    const f = dateFrom.slice(0, 10);
+    const t = dateTo.slice(0, 10);
+    return f === t ? f : `${f} → ${t}`;
+  }, [dateFrom, dateTo]);
+
+  const isSingleDayToday = dateFrom === today && dateTo === today;
+
   const report = useMemo(() => {
     if (!reportRaw) return null;
     const rows =
@@ -88,7 +98,8 @@ export default function DailyReport({ username }) {
       setError(null);
       try {
         const q = new URLSearchParams({
-          date: reportDate,
+          from: dateFrom.slice(0, 10),
+          to: dateTo.slice(0, 10),
           dropThresholdL: String(dropThreshold),
         });
         if (forceRefresh) q.set("refresh", "1");
@@ -102,18 +113,19 @@ export default function DailyReport({ username }) {
         if (gen === loadGenRef.current) setLoading(false);
       }
     },
-    [reportDate, dropThreshold],
+    [dateFrom, dateTo, dropThreshold],
   );
 
   useEffect(() => {
     loadReport(false);
-  }, [reportDate, dropThreshold, loadReport]);
+  }, [dateFrom, dateTo, dropThreshold, loadReport]);
 
   const loadLiveRefresh = useCallback(async () => {
     if (!reportRaw?.rows?.length || loading) return;
     try {
       const q = new URLSearchParams({
-        date: reportDate,
+        from: dateFrom.slice(0, 10),
+        to: dateTo.slice(0, 10),
         dropThresholdL: String(dropThreshold),
       });
       const data = await apiFetch(`/daily-log/report/live-refresh?${q}`, { timeoutMs: 60000 });
@@ -124,13 +136,13 @@ export default function DailyReport({ username }) {
     } catch {
       /* keep last rows */
     }
-  }, [reportDate, dropThreshold, reportRaw?.rows?.length, loading]);
+  }, [dateFrom, dateTo, dropThreshold, reportRaw?.rows?.length, loading]);
 
   useEffect(() => {
-    if (!autoRefresh || !reportRaw?.rows?.length) return undefined;
+    if (!autoRefresh || !isSingleDayToday || !reportRaw?.rows?.length) return undefined;
     const id = setInterval(loadLiveRefresh, LIVE_REFRESH_MS);
     return () => clearInterval(id);
-  }, [autoRefresh, reportRaw?.rows?.length, loadLiveRefresh]);
+  }, [autoRefresh, isSingleDayToday, reportRaw?.rows?.length, loadLiveRefresh]);
 
   useEffect(() => {
     if (!selectedDev) return undefined;
@@ -141,29 +153,41 @@ export default function DailyReport({ username }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [selectedDev]);
 
-  const loadAnalytics = useCallback(async () => {
-    const minL = customFuelMin.trim() ? parseFloat(customFuelMin) : fuelDropMinL;
-    try {
-      const fq = new URLSearchParams({
-        date: reportDate,
-        minL: String(minL),
-        dropThresholdL: String(dropThreshold),
-      });
-      const gq = new URLSearchParams({
-        date: reportDate,
-        minGapMin: String(gprsGapMin),
-        dropThresholdL: String(dropThreshold),
-      });
-      const [fuel, gprs] = await Promise.all([
-        apiFetch(`/daily-log/analytics/fuel-drops?${fq}`, { timeoutMs: 120000 }),
-        apiFetch(`/daily-log/analytics/gprs-gaps?${gq}`, { timeoutMs: 120000 }),
-      ]);
-      setFuelDropHits(fuel?.hits || []);
-      setGprsGapHits(gprs?.hits || []);
-    } catch (e) {
-      setError(e.message);
-    }
-  }, [reportDate, dropThreshold, fuelDropMinL, customFuelMin, gprsGapMin]);
+  const periodQuery = useCallback(() => {
+    const q = new URLSearchParams({
+      from: dateFrom.slice(0, 10),
+      to: dateTo.slice(0, 10),
+      dropThresholdL: String(dropThreshold),
+    });
+    return q;
+  }, [dateFrom, dateTo, dropThreshold]);
+
+  const loadAnalytics = useCallback(
+    async (mode = "both") => {
+      const minL = customFuelMin.trim() ? parseFloat(customFuelMin) : fuelDropMinL;
+      setAnalyticsLoading(true);
+      setError(null);
+      try {
+        const base = periodQuery();
+        if (mode === "fuel" || mode === "both") {
+          const fq = new URLSearchParams(base);
+          fq.set("minL", String(minL));
+          const fuel = await apiFetch(`/daily-log/analytics/fuel-drops?${fq}`, { timeoutMs: 300000 });
+          setFuelDropHits(fuel?.hits || []);
+        }
+        if (mode === "gprs" || mode === "both") {
+          const gq = new URLSearchParams(base);
+          gq.set("minGapMin", String(gprsGapMin));
+          const gprs = await apiFetch(`/daily-log/analytics/gprs-gaps?${gq}`, { timeoutMs: 300000 });
+          setGprsGapHits(gprs?.hits || []);
+        }
+      } catch (e) {
+        setError(e.message);
+      }
+      setAnalyticsLoading(false);
+    },
+    [periodQuery, fuelDropMinL, customFuelMin, gprsGapMin],
+  );
 
   const selected = report?.rows?.find((r) => r.devIdno === selectedDev) || null;
 
@@ -191,7 +215,7 @@ export default function DailyReport({ username }) {
     setSaving(true);
     setError(null);
     try {
-      const q = new URLSearchParams({ date: reportDate });
+      const q = new URLSearchParams({ date: dateTo.slice(0, 10) });
       const cam =
         patch.cameraStatus !== undefined ? patch.cameraStatus : cameraDraft;
       const body = {
@@ -257,7 +281,7 @@ export default function DailyReport({ username }) {
           devIdno: selectedDev,
           plate: selected?.plate,
           manualNote: newNote.trim(),
-          reportDate,
+          reportDate: dateTo.slice(0, 10),
           entryType: "notes",
         },
       });
@@ -273,7 +297,8 @@ export default function DailyReport({ username }) {
   const exportCsv = () => {
     const token = getToken();
     const q = new URLSearchParams({
-      date: reportDate,
+      from: dateFrom.slice(0, 10),
+      to: dateTo.slice(0, 10),
       dropThresholdL: String(dropThreshold),
     });
     fetch(`${API_BASE}/daily-log/report/export?${q}`, {
@@ -286,7 +311,10 @@ export default function DailyReport({ username }) {
       .then((blob) => {
         const a = document.createElement("a");
         a.href = URL.createObjectURL(blob);
-        a.download = `Helion_Daily_Report_${reportDate}.csv`;
+        a.download =
+          dateFrom === dateTo
+            ? `Helion_Daily_Report_${dateFrom}.csv`
+            : `Helion_Report_${dateFrom}_to_${dateTo}.csv`;
         a.click();
       })
       .catch((e) => setError(e.message));
@@ -355,10 +383,24 @@ export default function DailyReport({ username }) {
             placeholder="Filter table…"
           />
           <Inp
-            label="CMS analytics day"
+            label="Period from"
             type="date"
-            value={reportDate}
-            onChange={(e) => setReportDate(e.target.value)}
+            value={dateFrom}
+            onChange={(e) => {
+              const v = e.target.value;
+              setDateFrom(v);
+              if (v > dateTo) setDateTo(v);
+            }}
+          />
+          <Inp
+            label="Period to"
+            type="date"
+            value={dateTo}
+            onChange={(e) => {
+              const v = e.target.value;
+              setDateTo(v);
+              if (v < dateFrom) setDateFrom(v);
+            }}
           />
           <Sel
             label="Fuel drop alert (L)"
@@ -372,10 +414,21 @@ export default function DailyReport({ username }) {
           <Btn onClick={() => loadReport(true)} disabled={loading}>
             {loading ? "Loading CMS (up to 2 min)…" : "Refresh from CMS"}
           </Btn>
-          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: t.textSoft }}>
+          <label
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              fontSize: 12,
+              color: t.textSoft,
+              opacity: isSingleDayToday ? 1 : 0.5,
+            }}
+            title={isSingleDayToday ? "" : "Live refresh only for today (single day)"}
+          >
             <input
               type="checkbox"
-              checked={autoRefresh}
+              checked={autoRefresh && isSingleDayToday}
+              disabled={!isSingleDayToday}
               onChange={(e) => setAutoRefresh(e.target.checked)}
             />
             Live update every 30s
@@ -389,8 +442,13 @@ export default function DailyReport({ username }) {
           <Btn onClick={exportCsv} disabled={!report?.rows?.length}>
             Export CSV
           </Btn>
-          <Btn onClick={() => { setAnalyticsOpen((o) => !o); if (!analyticsOpen) loadAnalytics(); }}>
-            {analyticsOpen ? "Hide analytics" : "Fuel drops & GPS gaps"}
+          <Btn
+            onClick={() => {
+              if (analyticsView === "closed") setAnalyticsView("minimized");
+              else setAnalyticsView("closed");
+            }}
+          >
+            {analyticsView === "closed" ? "Fuel drops & GPS gaps" : "Close analytics"}
           </Btn>
         </div>
         {report?.summary && (
@@ -407,66 +465,23 @@ export default function DailyReport({ username }) {
         )}
       </Panel>
 
-      {analyticsOpen && (
-        <Panel title="Monitoring analytics" subtitle="Fuel drops and GPS location gaps for selected CMS day">
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "flex-end", marginBottom: 16 }}>
-            <Sel
-              label="Min fuel drop (L)"
-              value={String(fuelDropMinL)}
-              onChange={(e) => setFuelDropMinL(Number(e.target.value))}
-              options={FUEL_DROP_FILTER.map((n) => ({ value: String(n), label: `${n} L` }))}
-            />
-            <Inp
-              label="Custom min (L)"
-              value={customFuelMin}
-              onChange={(e) => setCustomFuelMin(e.target.value)}
-              placeholder="e.g. 35"
-              style={{ width: 100 }}
-            />
-            <Inp
-              label="Min GPS gap (min)"
-              value={String(gprsGapMin)}
-              onChange={(e) => setGprsGapMin(Number(e.target.value) || 30)}
-              type="number"
-            />
-            <Btn onClick={loadAnalytics}>Run analysis</Btn>
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-            <div>
-              <div style={{ fontWeight: 700, marginBottom: 8 }}>Fuel drops ({fuelDropHits.length})</div>
-              <div style={{ maxHeight: 220, overflowY: "auto", fontSize: 11 }}>
-                {fuelDropHits.length === 0 ? (
-                  <div style={{ color: t.muted }}>None at this threshold</div>
-                ) : (
-                  fuelDropHits.slice(0, 80).map((h, i) => (
-                    <div key={i} style={{ marginBottom: 6, padding: 6, background: t.bg, borderRadius: 6 }}>
-                      <strong>{h.plate}</strong> −{h.litres}L at {h.at}
-                      {h.minutesSincePrevDrop != null && (
-                        <span style={{ color: t.textSoft }}> ({h.minutesSincePrevDrop}m after prev)</span>
-                      )}
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-            <div>
-              <div style={{ fontWeight: 700, marginBottom: 8 }}>GPS gaps / stale ({gprsGapHits.length})</div>
-              <div style={{ maxHeight: 220, overflowY: "auto", fontSize: 11 }}>
-                {gprsGapHits.length === 0 ? (
-                  <div style={{ color: t.muted }}>None at this threshold</div>
-                ) : (
-                  gprsGapHits.slice(0, 80).map((h, i) => (
-                    <div key={i} style={{ marginBottom: 6, padding: 6, background: t.bg, borderRadius: 6 }}>
-                      <strong>{h.plate}</strong> {h.durationLabel}
-                      <div style={{ color: t.textSoft }}>{h.from?.slice(0, 16)} → {h.to?.slice(0, 16) || "—"}</div>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-          </div>
-        </Panel>
-      )}
+      <AnalyticsPanel
+        view={analyticsView}
+        onViewChange={setAnalyticsView}
+        periodLabel={periodLabel}
+        fuelDropMinL={fuelDropMinL}
+        setFuelDropMinL={setFuelDropMinL}
+        customFuelMin={customFuelMin}
+        setCustomFuelMin={setCustomFuelMin}
+        gprsGapMin={gprsGapMin}
+        setGprsGapMin={setGprsGapMin}
+        fuelDropHits={fuelDropHits}
+        gprsGapHits={gprsGapHits}
+        analyticsLoading={analyticsLoading}
+        onRunFuel={() => loadAnalytics("fuel")}
+        onRunGprs={() => loadAnalytics("gprs")}
+        onRunBoth={() => loadAnalytics("both")}
+      />
 
       {topIssues.length > 0 && (
         <Panel title="Issues to review" subtitle="Click vehicle in table for detail">
@@ -496,7 +511,7 @@ export default function DailyReport({ username }) {
       )}
 
       <Panel
-        title={`Fleet table — CMS day ${reportDate}`}
+        title={`Fleet table — ${periodLabel}`}
         subtitle="Click a row to edit cameras & notes. Table scrolls independently — close edit panel with ×."
       >
           {loading && !report ? (

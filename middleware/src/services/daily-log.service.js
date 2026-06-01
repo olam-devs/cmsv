@@ -79,6 +79,23 @@ function parseDateRange(from, to) {
   };
 }
 
+/** Normalize report / analytics period (from query or opts). */
+function resolveReportPeriod(reportDate, opts = {}) {
+  let from = String(opts.from || reportDate || todayStr()).slice(0, 10);
+  let to = String(opts.to || opts.from || reportDate || from).slice(0, 10);
+  if (to < from) {
+    const swap = from;
+    from = to;
+    to = swap;
+  }
+  return {
+    from,
+    to,
+    label: from === to ? from : `${from} → ${to}`,
+    singleDay: from === to,
+  };
+}
+
 function entryInRange(entry, from, to) {
   const d = String(entry.reportDate || entry.recordedAt?.slice(0, 10) || '');
   return d >= from && d <= to;
@@ -318,12 +335,13 @@ function getVehicleUpdateHistory(devIdno, opts = {}) {
   };
 }
 
-async function buildInspectionForVehicle(vehicle, reportDate, dropThresholdL) {
+async function buildInspectionForVehicle(vehicle, reportDate, dropThresholdL, periodOpts = {}) {
   const devIdno = vehicle.devIdno || vehicle.id;
   const plate = vehicle.plate || vehicle.nm || devIdno;
-  const range = parseDateRange(reportDate, reportDate);
+  const period = resolveReportPeriod(reportDate, periodOpts);
+  const range = parseDateRange(period.from, period.to);
   const dropThreshold = dropThresholdL ?? store.settings.defaultDropThresholdL ?? 20;
-  const manual = getManualInspection(devIdno, reportDate);
+  const manual = getManualInspection(devIdno, period.to);
 
   const [statusRes, tracksRes, alarmRes] = await Promise.allSettled([
     cms.getVehicleGPS(devIdno),
@@ -342,15 +360,15 @@ async function buildInspectionForVehicle(vehicle, reportDate, dropThresholdL) {
   }));
   const fuelSeries = normalizeFuelPoints({ infos: trackList });
   const fuelEvents = detectFuelEvents(fuelSeries, dropThreshold, dropThreshold);
-  const isToday = reportDate === todayStr();
+  const isToday = period.singleDay && period.to === todayStr();
   const connectivity = analyzeGpsTrack(trackList.length ? trackList : scaledTracks, {
-    asOfMs: isToday ? Date.now() : new Date(`${reportDate}T23:59:59`).getTime(),
+    asOfMs: isToday ? Date.now() : new Date(`${period.to}T23:59:59`).getTime(),
     historicalDay: !isToday,
   });
 
   let uptimeWrap = { offlineNowSecs: 0, last: null };
   try {
-    const tl = uptimeAnalytics.timeline(devIdno, { date: reportDate });
+    const tl = uptimeAnalytics.timeline(devIdno, { date: period.to });
     uptimeWrap = {
       offlineNowSecs: tl.summary?.offlineNowSecs || 0,
       last: tl.summary?.last || null,
@@ -367,7 +385,7 @@ async function buildInspectionForVehicle(vehicle, reportDate, dropThresholdL) {
     connectivity,
     uptimeSummary: uptimeWrap,
     dropThresholdL: dropThreshold,
-    reportDate,
+    reportDate: period.to,
     manual: {
       camerasOk: manual.camerasOk,
       cameraStatus: manual.cameraStatus,
@@ -384,19 +402,23 @@ async function buildInspectionForVehicle(vehicle, reportDate, dropThresholdL) {
   row.camerasLabel = camSum.label;
   row.camerasOk = camSum.ok;
 
+  row.periodFrom = period.from;
+  row.periodTo = period.to;
+  row.periodLabel = period.label;
+
   row.manualEntries = listEntries({
-    from: reportDate,
-    to: reportDate,
+    from: period.from,
+    to: period.to,
     devIdnos: [devIdno],
   });
 
-  attachVehicleTimestamps(row, devIdno, reportDate);
+  attachVehicleTimestamps(row, devIdno, period.to);
 
   pushSyncLog({
     devIdno,
     plate,
     type: 'cms_sync',
-    cmsReportDate: reportDate,
+    cmsReportDate: period.label,
     summary: (row.autoNotes || '').slice(0, 200),
     createdBy: null,
     lastGpsUploadAt: row.lastGpsUploadAt,
@@ -407,9 +429,11 @@ async function buildInspectionForVehicle(vehicle, reportDate, dropThresholdL) {
   return row;
 }
 
-async function refreshReportLiveByDate(reportDate, dropThresholdL, vehicles) {
-  const date = String(reportDate).slice(0, 10);
-  const cacheKey = reportCacheKey(date, dropThresholdL, vehicles.length);
+async function refreshReportLiveByDate(reportDate, dropThresholdL, vehicles, periodOpts = {}) {
+  const period = resolveReportPeriod(reportDate, periodOpts);
+  if (!period.singleDay) return null;
+  const date = period.to;
+  const cacheKey = reportCacheKey(period.from, period.to, dropThresholdL, vehicles.length);
   const hit = reportBuildCache.get(cacheKey);
   if (!hit?.report?.rows?.length) return null;
   return refreshReportLive(hit.report.rows, date);
@@ -549,13 +573,13 @@ const reportBuildCache = new Map();
 const inflightReports = new Map();
 const REPORT_CACHE_MS = parseInt(process.env.DAILY_REPORT_CACHE_MS, 10) || 180000;
 
-function reportCacheKey(date, dropThresholdL, vehicleCount) {
-  return `${date}|${dropThresholdL}|${vehicleCount}`;
+function reportCacheKey(from, to, dropThresholdL, vehicleCount) {
+  return `${from}|${to}|${dropThresholdL}|${vehicleCount}`;
 }
 
 async function buildDailyFleetReport(vehicles, reportDate, dropThresholdL, opts = {}) {
-  const date = String(reportDate || todayStr()).slice(0, 10);
-  const cacheKey = reportCacheKey(date, dropThresholdL, vehicles.length);
+  const period = resolveReportPeriod(reportDate, opts);
+  const cacheKey = reportCacheKey(period.from, period.to, dropThresholdL, vehicles.length);
   if (!opts.forceRefresh) {
     const hit = reportBuildCache.get(cacheKey);
     if (hit && Date.now() - hit.at < REPORT_CACHE_MS) {
@@ -567,7 +591,7 @@ async function buildDailyFleetReport(vehicles, reportDate, dropThresholdL, opts 
     if (pending) return pending;
   }
 
-  const work = buildDailyFleetReportWork(vehicles, date, dropThresholdL, cacheKey);
+  const work = buildDailyFleetReportWork(vehicles, period, dropThresholdL, cacheKey);
   if (!opts.forceRefresh) inflightReports.set(cacheKey, work);
   try {
     return await work;
@@ -576,13 +600,16 @@ async function buildDailyFleetReport(vehicles, reportDate, dropThresholdL, opts 
   }
 }
 
-async function buildDailyFleetReportWork(vehicles, date, dropThresholdL, cacheKey) {
+async function buildDailyFleetReportWork(vehicles, period, dropThresholdL, cacheKey) {
   const concurrency = Math.max(1, Math.min(16, parseInt(process.env.DAILY_REPORT_CONCURRENCY, 10) || 8));
   const built = await mapWithConcurrency(
     vehicles,
     async (v, i) => {
       try {
-        const row = await buildInspectionForVehicle(v, date, dropThresholdL);
+        const row = await buildInspectionForVehicle(v, period.from, dropThresholdL, {
+          from: period.from,
+          to: period.to,
+        });
         row.no = i + 1;
         return row;
       } catch (e) {
@@ -590,7 +617,9 @@ async function buildDailyFleetReportWork(vehicles, date, dropThresholdL, cacheKe
           no: i + 1,
           devIdno: v.devIdno || v.id,
           plate: v.plate || v.nm,
-          reportDate: date,
+          reportDate: period.to,
+          periodFrom: period.from,
+          periodTo: period.to,
           error: e.message,
           hasIssues: true,
           issues: [{ code: 'error', message: e.message, severity: 'high' }],
@@ -609,7 +638,9 @@ async function buildDailyFleetReportWork(vehicles, date, dropThresholdL, cacheKe
           ...iss,
           devIdno: row.devIdno,
           plate: row.plate,
-          reportDate: date,
+          reportDate: period.to,
+          periodFrom: period.from,
+          periodTo: period.to,
         });
       }
     }
@@ -623,7 +654,8 @@ async function buildDailyFleetReportWork(vehicles, date, dropThresholdL, cacheKe
   save();
 
   const result = {
-    reportDate: date,
+    reportDate: period.to,
+    period: { from: period.from, to: period.to, label: period.label },
     reportRefreshedAt: new Date().toISOString(),
     title: 'HELION TRACKING — DAILY FLEET MONITORING REPORT',
     rows,
@@ -784,6 +816,7 @@ module.exports = {
   buildVehicleInsight,
   buildInsightsForVehicles,
   parseDateRange,
+  resolveReportPeriod,
   todayStr,
   inspectionKey,
   getManualInspection,

@@ -25,6 +25,14 @@ async function loadVehicles(res) {
   }
 }
 
+function queryPeriod(req) {
+  const date = (req.query.date || req.query.from || dailyLog.todayStr()).slice(0, 10);
+  return dailyLog.resolveReportPeriod(date, {
+    from: req.query.from,
+    to: req.query.to || req.query.date,
+  });
+}
+
 router.post('/auth/login', (req, res) => {
   const { username, password } = req.body || {};
   if (!verifyLogin(username, password)) {
@@ -84,7 +92,7 @@ router.get('/vehicles', async (req, res) => {
 });
 
 router.get('/daily-log/report', async (req, res) => {
-  const date = (req.query.date || req.query.from || dailyLog.todayStr()).slice(0, 10);
+  const period = queryPeriod(req);
   const dropThresholdL = parseFloat(req.query.dropThresholdL) || dailyLog.getSettings().defaultDropThresholdL;
   let vehicles = await loadVehicles(res);
   if (vehicles == null) return;
@@ -94,20 +102,32 @@ router.get('/daily-log/report', async (req, res) => {
     vehicles = vehicles.filter((v) => parts.has(v.devIdno) || parts.has(v.plate) || parts.has(v.nm));
   }
   const forceRefresh = req.query.refresh === '1' || req.query.refresh === 'true';
-  const report = await dailyLog.buildDailyFleetReport(vehicles, date, dropThresholdL, { forceRefresh });
-  ok(res, report, { period: { date } });
+  const report = await dailyLog.buildDailyFleetReport(vehicles, period.from, dropThresholdL, {
+    from: period.from,
+    to: period.to,
+    forceRefresh,
+  });
+  ok(res, report, { period });
 });
 
 router.get('/daily-log/report/export', async (req, res) => {
-  const date = (req.query.date || dailyLog.todayStr()).slice(0, 10);
+  const period = queryPeriod(req);
   const dropThresholdL = parseFloat(req.query.dropThresholdL) || dailyLog.getSettings().defaultDropThresholdL;
   const vehicles = await loadVehicles(res);
   if (vehicles == null) return;
   const forceRefresh = req.query.refresh === '1' || req.query.refresh === 'true';
-  const report = await dailyLog.buildDailyFleetReport(vehicles, date, dropThresholdL, { forceRefresh });
+  const report = await dailyLog.buildDailyFleetReport(vehicles, period.from, dropThresholdL, {
+    from: period.from,
+    to: period.to,
+    forceRefresh,
+  });
   const csv = dailyLog.rowsToCsv(report);
+  const fname =
+    period.from === period.to
+      ? `Helion_Daily_Report_${period.from}.csv`
+      : `Helion_Report_${period.from}_to_${period.to}.csv`;
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-  res.setHeader('Content-Disposition', `attachment; filename="Helion_Daily_Report_${date}.csv"`);
+  res.setHeader('Content-Disposition', `attachment; filename="${fname}"`);
   res.send(csv);
 });
 
@@ -146,11 +166,14 @@ router.patch('/daily-log/report/:id', async (req, res) => {
 });
 
 router.get('/daily-log/report/live-refresh', async (req, res) => {
-  const date = (req.query.date || dailyLog.todayStr()).slice(0, 10);
+  const period = queryPeriod(req);
   const dropThresholdL = parseFloat(req.query.dropThresholdL) || dailyLog.getSettings().defaultDropThresholdL;
   const vehicles = await loadVehicles(res);
   if (vehicles == null) return;
-  let payload = await dailyLog.refreshReportLiveByDate(date, dropThresholdL, vehicles);
+  let payload = await dailyLog.refreshReportLiveByDate(period.to, dropThresholdL, vehicles, {
+    from: period.from,
+    to: period.to,
+  });
   if (!payload && req.query.rows) {
     try {
       const rows = JSON.parse(req.query.rows);
@@ -160,7 +183,7 @@ router.get('/daily-log/report/live-refresh', async (req, res) => {
   if (!payload) {
     return err(res, 'No cached report for this day — click Refresh from CMS first', 404);
   }
-  ok(res, payload, { period: { date } });
+  ok(res, payload, { period });
 });
 
 router.post('/daily-log/report/live-refresh', async (req, res) => {
@@ -174,25 +197,35 @@ router.post('/daily-log/report/live-refresh', async (req, res) => {
 });
 
 router.get('/daily-log/analytics/fuel-drops', async (req, res) => {
-  const date = (req.query.date || dailyLog.todayStr()).slice(0, 10);
+  const period = queryPeriod(req);
   const minL = parseFloat(req.query.minL) || 20;
   const dropThresholdL = parseFloat(req.query.dropThresholdL) || dailyLog.getSettings().defaultDropThresholdL;
+  const forceRefresh = req.query.refresh === '1' || req.query.refresh === 'true';
   const vehicles = await loadVehicles(res);
   if (vehicles == null) return;
-  const report = await dailyLog.buildDailyFleetReport(vehicles, date, dropThresholdL, { forceRefresh: false });
+  const report = await dailyLog.buildDailyFleetReport(vehicles, period.from, dropThresholdL, {
+    from: period.from,
+    to: period.to,
+    forceRefresh,
+  });
   const hits = dailyLog.analyzeFleetFuelDrops(report.rows, minL, req.query.maxGapMin);
-  ok(res, { hits, minL, date }, { count: hits.length });
+  ok(res, { hits, minL, period }, { count: hits.length });
 });
 
 router.get('/daily-log/analytics/gprs-gaps', async (req, res) => {
-  const date = (req.query.date || dailyLog.todayStr()).slice(0, 10);
+  const period = queryPeriod(req);
   const minGapMin = parseFloat(req.query.minGapMin) || 30;
   const dropThresholdL = parseFloat(req.query.dropThresholdL) || dailyLog.getSettings().defaultDropThresholdL;
+  const forceRefresh = req.query.refresh === '1' || req.query.refresh === 'true';
   const vehicles = await loadVehicles(res);
   if (vehicles == null) return;
-  const report = await dailyLog.buildDailyFleetReport(vehicles, date, dropThresholdL, { forceRefresh: false });
+  const report = await dailyLog.buildDailyFleetReport(vehicles, period.from, dropThresholdL, {
+    from: period.from,
+    to: period.to,
+    forceRefresh,
+  });
   const hits = dailyLog.analyzeFleetGprsGaps(report.rows, minGapMin);
-  ok(res, { hits, minGapMin, date }, { count: hits.length });
+  ok(res, { hits, minGapMin, period }, { count: hits.length });
 });
 
 router.post('/daily-log/entries', async (req, res) => {
