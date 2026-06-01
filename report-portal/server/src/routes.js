@@ -11,21 +11,16 @@ const { verifyLogin, signReportUser } = require('./auth');
 const MW = path.join(__dirname, '../../../middleware/src');
 const dailyLog = require(path.join(MW, 'services/daily-log.service'));
 const cms = require(path.join(MW, 'services/cmsv6.service'));
+const { loadFleetVehicles } = require('./vehicles');
 
 const ok = (res, data, meta = {}) => res.json({ success: true, ...meta, data });
 const err = (res, msg, status = 400) => res.status(status).json({ success: false, message: msg });
 
-/** Load fleet from CMSV6 — do not hide failures (empty list looked like “no vehicles”). */
 async function loadVehicles(res) {
   try {
-    const vehicles = await cms.getVehicles();
-    return vehicles.filter((v) => v.devIdno);
+    return await loadFleetVehicles();
   } catch (e) {
-    err(
-      res,
-      `CMS connection failed: ${e.message}. Check CMSV6_USERNAME and CMSV6_PASSWORD in report-portal/server/.env (same as C:\\helion\\middleware\\.env).`,
-      503,
-    );
+    err(res, e.message, 503);
     return null;
   }
 }
@@ -56,15 +51,25 @@ async function resolveDevIdno(id) {
 
 router.get('/diagnostics/cms', async (req, res) => {
   try {
-    const vehicles = await cms.getVehicles();
+    let cmsCount = null;
+    let cmsError = null;
+    try {
+      const cmsList = await cms.getVehicles();
+      cmsCount = cmsList.filter((v) => v.devIdno).length;
+    } catch (e) {
+      cmsError = e.message;
+    }
+    const fleet = await loadFleetVehicles();
     ok(res, {
-      vehicleCount: vehicles.length,
-      withDevice: vehicles.filter((v) => v.devIdno).length,
+      fleetCount: fleet.length,
+      cmsDirectCount: cmsCount,
+      cmsError,
       cmsv6BaseUrl: process.env.CMSV6_BASE_URL,
       cmsv6User: process.env.CMSV6_USERNAME,
+      middlewareApi: process.env.HELION_API_BASE || 'http://127.0.0.1:3000/api',
     });
   } catch (e) {
-    err(res, `CMS: ${e.message}`, 503);
+    err(res, e.message, 503);
   }
 });
 

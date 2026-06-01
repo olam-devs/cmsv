@@ -1,11 +1,13 @@
 const path = require('path');
 const fs = require('fs');
 
-require('dotenv').config({ path: path.join(__dirname, '../.env') });
+// Middleware .env first (CMSV6 login — same as working helion-middleware).
+// Report portal .env second so PORT + REPORT_PORTAL_* are not overwritten.
 const mwEnv = path.join(__dirname, '../../../middleware/.env');
 if (fs.existsSync(mwEnv)) {
-  require('dotenv').config({ path: mwEnv, override: false });
+  require('dotenv').config({ path: mwEnv });
 }
+require('dotenv').config({ path: path.join(__dirname, '../.env'), override: true });
 require('express-async-errors');
 const express = require('express');
 const helmet = require('helmet');
