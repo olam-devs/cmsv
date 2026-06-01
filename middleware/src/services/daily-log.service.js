@@ -16,6 +16,7 @@ const {
   buildAutoNotes,
 } = require('../utils/fuel-analyze');
 const { analyzeGpsTrack, buildInspectionRow } = require('../utils/daily-inspection');
+const { sortDailyReportRows } = require('../utils/daily-report-sort');
 const uptimeAnalytics = require('./uptime-analytics.service');
 
 const FILE = path.join(__dirname, '../../../data/daily-log.json');
@@ -386,7 +387,9 @@ async function buildDailyFleetReport(vehicles, reportDate, dropThresholdL, opts 
   if (!opts.forceRefresh) {
     const hit = reportBuildCache.get(cacheKey);
     if (hit && Date.now() - hit.at < REPORT_CACHE_MS) {
-      return { ...hit.report, cached: true };
+      const report = { ...hit.report, cached: true };
+      report.rows = sortDailyReportRows(report.rows || []);
+      return report;
     }
     const pending = inflightReports.get(cacheKey);
     if (pending) return pending;
@@ -425,7 +428,7 @@ async function buildDailyFleetReportWork(vehicles, date, dropThresholdL, cacheKe
     concurrency,
   );
 
-  const rows = built;
+  const rows = sortDailyReportRows(built);
   const issues = [];
   for (const row of rows) {
     if (row.hasIssues) {
