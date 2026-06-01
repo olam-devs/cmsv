@@ -134,7 +134,77 @@ router.patch('/daily-log/report/:id', async (req, res) => {
     req.user?.username || null,
   );
   const row = await dailyLog.buildInspectionForVehicle(v, date, dailyLog.getSettings().defaultDropThresholdL);
-  ok(res, { manual: saved.inspection, vehicleMeta: saved.vehicleMeta, row });
+  const manualHistory = dailyLog.getManualHistory(devIdno, { limit: 100 });
+  ok(res, { manual: saved.inspection, vehicleMeta: saved.vehicleMeta, row, manualHistory });
+});
+
+router.get('/daily-log/report/live-refresh', async (req, res) => {
+  const date = (req.query.date || dailyLog.todayStr()).slice(0, 10);
+  const dropThresholdL = parseFloat(req.query.dropThresholdL) || dailyLog.getSettings().defaultDropThresholdL;
+  const vehicles = await loadVehicles(res);
+  if (vehicles == null) return;
+  let payload = await dailyLog.refreshReportLiveByDate(date, dropThresholdL, vehicles);
+  if (!payload && req.query.rows) {
+    try {
+      const rows = JSON.parse(req.query.rows);
+      payload = await dailyLog.refreshReportLive(rows, date);
+    } catch (_) {}
+  }
+  if (!payload) {
+    return err(res, 'No cached report for this day — click Refresh from CMS first', 404);
+  }
+  ok(res, payload, { period: { date } });
+});
+
+router.post('/daily-log/report/live-refresh', async (req, res) => {
+  const date = (req.query.date || req.body?.date || dailyLog.todayStr()).slice(0, 10);
+  const rows = req.body?.rows;
+  if (!Array.isArray(rows) || !rows.length) {
+    return err(res, 'Body must include rows array from current report', 400);
+  }
+  const payload = await dailyLog.refreshReportLive(rows, date);
+  ok(res, payload, { period: { date } });
+});
+
+router.get('/daily-log/analytics/fuel-drops', async (req, res) => {
+  const date = (req.query.date || dailyLog.todayStr()).slice(0, 10);
+  const minL = parseFloat(req.query.minL) || 20;
+  const dropThresholdL = parseFloat(req.query.dropThresholdL) || dailyLog.getSettings().defaultDropThresholdL;
+  const vehicles = await loadVehicles(res);
+  if (vehicles == null) return;
+  const report = await dailyLog.buildDailyFleetReport(vehicles, date, dropThresholdL, { forceRefresh: false });
+  const hits = dailyLog.analyzeFleetFuelDrops(report.rows, minL, req.query.maxGapMin);
+  ok(res, { hits, minL, date }, { count: hits.length });
+});
+
+router.get('/daily-log/analytics/gprs-gaps', async (req, res) => {
+  const date = (req.query.date || dailyLog.todayStr()).slice(0, 10);
+  const minGapMin = parseFloat(req.query.minGapMin) || 30;
+  const dropThresholdL = parseFloat(req.query.dropThresholdL) || dailyLog.getSettings().defaultDropThresholdL;
+  const vehicles = await loadVehicles(res);
+  if (vehicles == null) return;
+  const report = await dailyLog.buildDailyFleetReport(vehicles, date, dropThresholdL, { forceRefresh: false });
+  const hits = dailyLog.analyzeFleetGprsGaps(report.rows, minGapMin);
+  ok(res, { hits, minGapMin, date }, { count: hits.length });
+});
+
+router.post('/daily-log/entries', async (req, res) => {
+  const { devIdno, plate, manualNote, reportDate, fields, entryType } = req.body || {};
+  if (!devIdno) return err(res, 'devIdno required', 400);
+  const entry = dailyLog.createEntry({
+    devIdno,
+    plate,
+    manualNote: manualNote || '',
+    reportDate: reportDate || dailyLog.todayStr(),
+    fields: { ...(fields || {}), type: entryType || fields?.type || 'note' },
+    createdBy: req.user?.username || null,
+  });
+  ok(res, entry);
+});
+
+router.get('/daily-log/vehicle/:id/manual-history', async (req, res) => {
+  const devIdno = await resolveDevIdno(req.params.id);
+  ok(res, dailyLog.getManualHistory(devIdno, { limit: req.query.limit }));
 });
 
 router.get('/daily-log/report/:id/live', async (req, res) => {

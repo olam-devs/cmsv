@@ -2,8 +2,11 @@ import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import { useTheme } from "./theme.jsx";
 import { Panel, Inp, Sel, Btn, ErrorBanner, Spinner, Empty, Badge } from "./ui/primitives.jsx";
 import { apiFetch, API_BASE, getToken, logout } from "./api.js";
+import { FuelCell, GprsCell, AntennaCell } from "./MonitorCells.jsx";
 
 const THRESHOLD_OPTIONS = [5, 10, 15, 20, 25, 30, 40, 50];
+const FUEL_DROP_FILTER = [5, 10, 20, 30, 50];
+const LIVE_REFRESH_MS = 30000;
 const fuelTodayIso = () => new Date().toISOString().slice(0, 10);
 
 function fmtTs(isoOrStr) {
@@ -79,7 +82,17 @@ export default function DailyReport({ username }) {
   const [noteDraft, setNoteDraft] = useState("");
   const [bundleDraft, setBundleDraft] = useState("");
   const [updateHistory, setUpdateHistory] = useState(null);
+  const [manualHistory, setManualHistory] = useState([]);
   const [saving, setSaving] = useState(false);
+  const [autoRefresh, setAutoRefresh] = useState(true);
+  const [liveTick, setLiveTick] = useState(null);
+  const [analyticsOpen, setAnalyticsOpen] = useState(false);
+  const [fuelDropMinL, setFuelDropMinL] = useState(20);
+  const [customFuelMin, setCustomFuelMin] = useState("");
+  const [fuelDropHits, setFuelDropHits] = useState([]);
+  const [gprsGapHits, setGprsGapHits] = useState([]);
+  const [gprsGapMin, setGprsGapMin] = useState(30);
+  const [newNote, setNewNote] = useState("");
 
   useEffect(() => {
     apiFetch("/vehicles")
@@ -139,19 +152,70 @@ export default function DailyReport({ username }) {
     loadReport(false);
   }, [reportDate, dropThreshold, loadReport]);
 
+  const loadLiveRefresh = useCallback(async () => {
+    if (!reportRaw?.rows?.length || loading) return;
+    try {
+      const q = new URLSearchParams({
+        date: reportDate,
+        dropThresholdL: String(dropThreshold),
+      });
+      const data = await apiFetch(`/daily-log/report/live-refresh?${q}`, { timeoutMs: 60000 });
+      if (data?.rows?.length) {
+        setReportRaw((prev) => (prev ? { ...prev, rows: data.rows, liveRefreshedAt: data.refreshedAt } : prev));
+        setLiveTick(data.refreshedAt);
+      }
+    } catch {
+      /* keep last rows */
+    }
+  }, [reportDate, dropThreshold, reportRaw?.rows?.length, loading]);
+
+  useEffect(() => {
+    if (!autoRefresh || !reportRaw?.rows?.length) return undefined;
+    const id = setInterval(loadLiveRefresh, LIVE_REFRESH_MS);
+    return () => clearInterval(id);
+  }, [autoRefresh, reportRaw?.rows?.length, loadLiveRefresh]);
+
+  const loadAnalytics = useCallback(async () => {
+    const minL = customFuelMin.trim() ? parseFloat(customFuelMin) : fuelDropMinL;
+    try {
+      const fq = new URLSearchParams({
+        date: reportDate,
+        minL: String(minL),
+        dropThresholdL: String(dropThreshold),
+      });
+      const gq = new URLSearchParams({
+        date: reportDate,
+        minGapMin: String(gprsGapMin),
+        dropThresholdL: String(dropThreshold),
+      });
+      const [fuel, gprs] = await Promise.all([
+        apiFetch(`/daily-log/analytics/fuel-drops?${fq}`, { timeoutMs: 120000 }),
+        apiFetch(`/daily-log/analytics/gprs-gaps?${gq}`, { timeoutMs: 120000 }),
+      ]);
+      setFuelDropHits(fuel?.hits || []);
+      setGprsGapHits(gprs?.hits || []);
+    } catch (e) {
+      setError(e.message);
+    }
+  }, [reportDate, dropThreshold, fuelDropMinL, customFuelMin, gprsGapMin]);
+
   const selected = report?.rows?.find((r) => r.devIdno === selectedDev) || null;
 
   const selectRow = async (row) => {
     setSelectedDev(row.devIdno);
     setNoteDraft(row.notes || "");
     setBundleDraft(row.bundlePurchasedDate || "");
+    setNewNote("");
     try {
-      const hist = await apiFetch(
-        `/daily-log/vehicle/${encodeURIComponent(row.devIdno)}/history`,
-      );
+      const [hist, manual] = await Promise.all([
+        apiFetch(`/daily-log/vehicle/${encodeURIComponent(row.devIdno)}/history`),
+        apiFetch(`/daily-log/vehicle/${encodeURIComponent(row.devIdno)}/manual-history`),
+      ]);
       setUpdateHistory(hist);
+      setManualHistory(Array.isArray(manual) ? manual : []);
     } catch {
       setUpdateHistory(null);
+      setManualHistory([]);
     }
   };
 
@@ -199,6 +263,36 @@ export default function DailyReport({ username }) {
         `/daily-log/vehicle/${encodeURIComponent(selectedDev)}/history`,
       );
       setUpdateHistory(hist);
+      if (res?.manualHistory) setManualHistory(res.manualHistory);
+      else {
+        const manual = await apiFetch(
+          `/daily-log/vehicle/${encodeURIComponent(selectedDev)}/manual-history`,
+        );
+        setManualHistory(Array.isArray(manual) ? manual : []);
+      }
+    } catch (e) {
+      setError(e.message);
+    }
+    setSaving(false);
+  };
+
+  const addManualNote = async () => {
+    if (!selectedDev || !newNote.trim()) return;
+    setSaving(true);
+    try {
+      await apiFetch("/daily-log/entries", {
+        method: "POST",
+        body: {
+          devIdno: selectedDev,
+          plate: selected?.plate,
+          manualNote: newNote.trim(),
+          reportDate,
+          entryType: "notes",
+        },
+      });
+      setNewNote("");
+      const row = report?.rows?.find((r) => r.devIdno === selectedDev);
+      if (row) await selectRow(row);
     } catch (e) {
       setError(e.message);
     }
@@ -281,7 +375,7 @@ export default function DailyReport({ username }) {
         HELION TRACKING — DAILY FLEET MONITORING REPORT
       </div>
 
-      <Panel subtitle="Pick CMS analytics day → Refresh from CMS (30–90s). BUNDLE = last data bundle bought. Click a row to edit cameras/notes.">
+      <Panel subtitle="Refresh from CMS for full day data. Live update every 30s refreshes fuel, location & offline times. Cell colours: green=OK, orange=aging (2h+), red=stale (6h+) or never.">
         <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "flex-end" }}>
           <Inp
             label="Search plate / device"
@@ -307,11 +401,25 @@ export default function DailyReport({ username }) {
           <Btn onClick={() => loadReport(true)} disabled={loading}>
             {loading ? "Loading CMS (up to 2 min)…" : "Refresh from CMS"}
           </Btn>
+          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: t.textSoft }}>
+            <input
+              type="checkbox"
+              checked={autoRefresh}
+              onChange={(e) => setAutoRefresh(e.target.checked)}
+            />
+            Live update every 30s
+          </label>
+          {liveTick && (
+            <Badge color={t.textSoft}>Live {fmtTs(liveTick)}</Badge>
+          )}
           {report?.cached && (
             <Badge color={t.textSoft}>Cached — use Refresh for live data</Badge>
           )}
           <Btn onClick={exportCsv} disabled={!report?.rows?.length}>
             Export CSV
+          </Btn>
+          <Btn onClick={() => { setAnalyticsOpen((o) => !o); if (!analyticsOpen) loadAnalytics(); }}>
+            {analyticsOpen ? "Hide analytics" : "Fuel drops & GPS gaps"}
           </Btn>
         </div>
         {report?.summary && (
@@ -327,6 +435,67 @@ export default function DailyReport({ username }) {
           </div>
         )}
       </Panel>
+
+      {analyticsOpen && (
+        <Panel title="Monitoring analytics" subtitle="Fuel drops and GPS location gaps for selected CMS day">
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "flex-end", marginBottom: 16 }}>
+            <Sel
+              label="Min fuel drop (L)"
+              value={String(fuelDropMinL)}
+              onChange={(e) => setFuelDropMinL(Number(e.target.value))}
+              options={FUEL_DROP_FILTER.map((n) => ({ value: String(n), label: `${n} L` }))}
+            />
+            <Inp
+              label="Custom min (L)"
+              value={customFuelMin}
+              onChange={(e) => setCustomFuelMin(e.target.value)}
+              placeholder="e.g. 35"
+              style={{ width: 100 }}
+            />
+            <Inp
+              label="Min GPS gap (min)"
+              value={String(gprsGapMin)}
+              onChange={(e) => setGprsGapMin(Number(e.target.value) || 30)}
+              type="number"
+            />
+            <Btn onClick={loadAnalytics}>Run analysis</Btn>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+            <div>
+              <div style={{ fontWeight: 700, marginBottom: 8 }}>Fuel drops ({fuelDropHits.length})</div>
+              <div style={{ maxHeight: 220, overflowY: "auto", fontSize: 11 }}>
+                {fuelDropHits.length === 0 ? (
+                  <div style={{ color: t.muted }}>None at this threshold</div>
+                ) : (
+                  fuelDropHits.slice(0, 80).map((h, i) => (
+                    <div key={i} style={{ marginBottom: 6, padding: 6, background: t.bg, borderRadius: 6 }}>
+                      <strong>{h.plate}</strong> −{h.litres}L at {h.at}
+                      {h.minutesSincePrevDrop != null && (
+                        <span style={{ color: t.textSoft }}> ({h.minutesSincePrevDrop}m after prev)</span>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+            <div>
+              <div style={{ fontWeight: 700, marginBottom: 8 }}>GPS gaps / stale ({gprsGapHits.length})</div>
+              <div style={{ maxHeight: 220, overflowY: "auto", fontSize: 11 }}>
+                {gprsGapHits.length === 0 ? (
+                  <div style={{ color: t.muted }}>None at this threshold</div>
+                ) : (
+                  gprsGapHits.slice(0, 80).map((h, i) => (
+                    <div key={i} style={{ marginBottom: 6, padding: 6, background: t.bg, borderRadius: 6 }}>
+                      <strong>{h.plate}</strong> {h.durationLabel}
+                      <div style={{ color: t.textSoft }}>{h.from?.slice(0, 16)} → {h.to?.slice(0, 16) || "—"}</div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+        </Panel>
+      )}
 
       {topIssues.length > 0 && (
         <Panel title="Issues to review" subtitle="Click vehicle in table for detail">
@@ -461,12 +630,14 @@ export default function DailyReport({ username }) {
                           )}
                         </td>
                         <td style={{ padding: 8 }}>
-                          <StatusCell ok={row.fuelSensorOk} t={t} />
+                          <FuelCell row={row} />
                         </td>
                         <td style={{ padding: 8 }}>
-                          <StatusCell ok={row.gprsOk} t={t} />
+                          <GprsCell row={row} />
                         </td>
-                        <td style={{ padding: 8, fontSize: 11 }}>{row.offlineLabel || "—"}</td>
+                        <td style={{ padding: 8 }}>
+                          <AntennaCell row={row} />
+                        </td>
                         <td style={{ padding: 8, fontSize: 11 }}>{row.helionLabel}</td>
                         <td
                           style={{
@@ -537,8 +708,57 @@ export default function DailyReport({ username }) {
                 {saving ? "Saving…" : "Save"}
               </Btn>
             </div>
+            <div style={{ marginTop: 14, borderTop: `1px solid ${t.border}`, paddingTop: 12 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, marginBottom: 6 }}>Add new note record</div>
+              <textarea
+                value={newNote}
+                onChange={(e) => setNewNote(e.target.value)}
+                rows={2}
+                placeholder="New monitoring note (saved as separate history entry)…"
+                style={{
+                  width: "100%",
+                  boxSizing: "border-box",
+                  borderRadius: 8,
+                  border: `1px solid ${t.border}`,
+                  padding: 8,
+                  fontFamily: "inherit",
+                  fontSize: 12,
+                }}
+              />
+              <Btn onClick={addManualNote} disabled={saving || !newNote.trim()} style={{ marginTop: 6 }}>
+                Add history entry
+              </Btn>
+            </div>
+            {manualHistory.length > 0 && (
+              <div style={{ marginTop: 14, borderTop: `1px solid ${t.border}`, paddingTop: 12 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, marginBottom: 8 }}>All manual records</div>
+                <div style={{ maxHeight: 200, overflowY: "auto", fontSize: 10 }}>
+                  {manualHistory.map((ent) => (
+                    <div
+                      key={ent.id}
+                      style={{
+                        marginBottom: 8,
+                        padding: 8,
+                        background: t.bg,
+                        borderRadius: 8,
+                        borderLeft: `3px solid ${ent.fields?.type === "cameras" ? t.orange : t.accent}`,
+                      }}
+                    >
+                      <div style={{ fontWeight: 700 }}>
+                        {ent.fields?.type || "note"} · {fmtDay(ent.reportDate)} · {fmtTs(ent.recordedAt)}
+                      </div>
+                      {ent.createdBy && (
+                        <div style={{ color: t.muted }}>by {ent.createdBy}</div>
+                      )}
+                      <div style={{ marginTop: 4 }}>{ent.manualNote || "—"}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
             {updateHistory?.syncLog?.length > 0 && (
               <div style={{ marginTop: 14, fontSize: 10, color: t.textSoft }}>
+                <div style={{ fontWeight: 700, marginBottom: 6 }}>CMS sync log</div>
                 {updateHistory.syncLog.slice(0, 8).map((ev) => (
                   <div key={ev.id} style={{ marginBottom: 4 }}>
                     {ev.type === "cms_sync" ? "CMS sync" : "Edited"} · {fmtTs(ev.at)}

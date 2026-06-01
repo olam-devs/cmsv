@@ -282,7 +282,15 @@ function buildInspectionRow({
     fuel: {
       startL: fuelSeries?.[0]?.fuel ?? null,
       endL: fuelSeries?.[fuelSeries.length - 1]?.fuel ?? null,
-      drops: fuelEvents?.filter((e) => e.type === 'drop') || [],
+      lastAt:
+        fuelSeries?.length
+          ? fuelSeries[fuelSeries.length - 1].timeStr
+          : liveStatus?.gpsTime || null,
+      drops: (fuelEvents?.filter((e) => e.type === 'drop') || []).map((d) => ({
+        ...d,
+        time: d.time,
+        timeStr: d.timeStr,
+      })),
     },
     live: liveStatus
       ? {
@@ -291,6 +299,9 @@ function buildInspectionRow({
           fuel: liveStatus.fuel,
           gpsTime: liveStatus.gpsTime,
           accOn: liveStatus.accOn,
+          lat: liveStatus.lat,
+          lng: liveStatus.lng,
+          ps: liveStatus.ps != null ? String(liveStatus.ps) : null,
         }
       : null,
     updatedAt: new Date().toISOString(),

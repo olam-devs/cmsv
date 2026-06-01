@@ -17,6 +17,7 @@ const {
 } = require('../utils/fuel-analyze');
 const { analyzeGpsTrack, buildInspectionRow } = require('../utils/daily-inspection');
 const { sortDailyReportRows } = require('../utils/daily-report-sort');
+const { enrichMonitorFields, enrichMonitorFieldsAsync } = require('../utils/report-monitor-fields');
 const uptimeAnalytics = require('./uptime-analytics.service');
 
 const FILE = path.join(__dirname, '../../../data/daily-log.json');
@@ -232,6 +233,27 @@ function saveManualInspection(devIdno, reportDate, patch = {}, createdBy = null)
     createdBy,
   });
 
+  if (patch.notes !== undefined && String(patch.notes).trim()) {
+    createEntry({
+      devIdno,
+      plate: meta.plate,
+      manualNote: String(patch.notes).trim(),
+      reportDate,
+      fields: { type: 'notes' },
+      createdBy,
+    });
+  }
+  if (patch.camerasOk !== undefined) {
+    createEntry({
+      devIdno,
+      plate: meta.plate,
+      manualNote: patch.camerasOk ? 'Cameras OK' : 'Camera issue',
+      reportDate,
+      fields: { type: 'cameras', camerasOk: patch.camerasOk },
+      createdBy,
+    });
+  }
+
   return { inspection: store.inspections[key], vehicleMeta: meta };
 }
 
@@ -354,7 +376,130 @@ async function buildInspectionForVehicle(vehicle, reportDate, dropThresholdL) {
     helionStatus: row.helionStatus,
   }, false);
 
+  await enrichMonitorFieldsAsync(row);
   return row;
+}
+
+async function refreshReportLiveByDate(reportDate, dropThresholdL, vehicles) {
+  const date = String(reportDate).slice(0, 10);
+  const cacheKey = reportCacheKey(date, dropThresholdL, vehicles.length);
+  const hit = reportBuildCache.get(cacheKey);
+  if (!hit?.report?.rows?.length) return null;
+  return refreshReportLive(hit.report.rows, date);
+}
+
+/** Fast live refresh for monitoring (~30s poll) — updates fuel/GPRS/antenna without full track rebuild. */
+async function refreshReportLive(rows, reportDate) {
+  const asOf = Date.now();
+  const statuses = await cms.getAllGPS().catch(() => []);
+  const map = new Map();
+  for (const s of statuses) {
+    const id = String(s.devIdno || s.id || '');
+    if (id) map.set(id, s);
+  }
+
+  for (const row of rows || []) {
+    const live = map.get(String(row.devIdno));
+    if (live) {
+      const online = (live.ol ?? live.online ?? 0) !== 0;
+      row.live = {
+        online,
+        speed: live.speed,
+        fuel: live.fuel,
+        gpsTime: live.gpsTime,
+        accOn: live.accOn,
+        lat: live.lat,
+        lng: live.lng,
+        ps: live.ps != null ? String(live.ps) : null,
+      };
+      if (!online) {
+        row.helionStatus = row.offlineDurationSecs >= 48 * 3600 ? 'not_active' : 'offline';
+        row.helionLabel = row.helionStatus === 'not_active' ? 'N/A Not Active' : 'Offline';
+      } else {
+        row.helionStatus = 'connected';
+        row.helionLabel = 'Connected';
+      }
+    }
+    await enrichMonitorFieldsAsync(row, asOf);
+  }
+
+  return {
+    reportDate: String(reportDate).slice(0, 10),
+    refreshedAt: new Date(asOf).toISOString(),
+    rows,
+  };
+}
+
+function analyzeFleetFuelDrops(rows, minLitres = 20, maxMinutesBetween = 180) {
+  const minL = Math.max(0, Number(minLitres) || 20);
+  const maxGap = Math.max(1, Number(maxMinutesBetween) || 180);
+  const hits = [];
+  for (const row of rows || []) {
+    const drops = [...(row.fuel?.drops || [])].sort((a, b) => (a.time || 0) - (b.time || 0));
+    for (let i = 0; i < drops.length; i++) {
+      const d = drops[i];
+      if (d.litres < minL) continue;
+      let gapMin = null;
+      if (i > 0 && drops[i - 1].time && d.time) {
+        gapMin = Math.round((d.time - drops[i - 1].time) / 60000);
+      }
+      if (i === 0 || gapMin == null || gapMin <= maxGap) {
+        hits.push({
+          devIdno: row.devIdno,
+          plate: row.plate,
+          litres: d.litres,
+          at: d.timeStr || (d.time ? new Date(d.time).toISOString() : null),
+          minutesSincePrevDrop: gapMin,
+          reportDate: row.reportDate,
+        });
+      }
+    }
+  }
+  hits.sort((a, b) => b.litres - a.litres);
+  return hits;
+}
+
+function analyzeFleetGprsGaps(rows, minGapMinutes = 30) {
+  const minSec = Math.max(60, (Number(minGapMinutes) || 30) * 60);
+  const hits = [];
+  for (const row of rows || []) {
+    for (const spell of row.connectivity?.offlineSpells || []) {
+      if ((spell.durationSecs || 0) >= minSec) {
+        hits.push({
+          devIdno: row.devIdno,
+          plate: row.plate,
+          durationSecs: spell.durationSecs,
+          durationLabel: spell.label || `${Math.round(spell.durationSecs / 60)}m`,
+          from: spell.from,
+          to: spell.to,
+          reportDate: row.reportDate,
+        });
+      }
+    }
+    const gprsAge = row.gprsDisplay?.ageLabel;
+    if (row.gprsDisplay?.status === 'error' && row.gprsDisplay?.updatedAt) {
+      hits.push({
+        devIdno: row.devIdno,
+        plate: row.plate,
+        durationSecs: null,
+        durationLabel: `Stale GPS (${gprsAge})`,
+        from: row.gprsDisplay.updatedAt,
+        to: null,
+        reportDate: row.reportDate,
+      });
+    }
+  }
+  hits.sort((a, b) => (b.durationSecs || 0) - (a.durationSecs || 0));
+  return hits;
+}
+
+function getManualHistory(devIdno, opts = {}) {
+  const limit = Math.min(parseInt(opts.limit) || 200, 500);
+  const entries = store.entries
+    .filter((e) => String(e.devIdno) === String(devIdno))
+    .sort((a, b) => new Date(b.recordedAt) - new Date(a.recordedAt))
+    .slice(0, limit);
+  return entries;
 }
 
 /** Run async work over items with limited parallelism (CMS calls are slow). */
@@ -622,5 +767,10 @@ module.exports = {
   ensureVehicleMeta,
   getVehicleMeta,
   getVehicleUpdateHistory,
+  getManualHistory,
+  refreshReportLive,
+  refreshReportLiveByDate,
+  analyzeFleetFuelDrops,
+  analyzeFleetGprsGaps,
   pushSyncLog,
 };
