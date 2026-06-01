@@ -4,6 +4,7 @@
  */
 
 const { detectFuelEvents } = require('./fuel-analyze');
+const cameraManual = require('./camera-manual');
 
 const GPRS_STALE_MS = 2 * 60 * 60 * 1000; // 2h without GPS → GPRS issue
 const TRACK_GAP_MS = 5 * 60 * 1000; // 5 min gap counts as offline spell
@@ -100,6 +101,7 @@ function buildIssueList({
   antennaOk,
   offlineLabel,
   camerasOk,
+  cameraStatus,
   manualNotes,
   fuelDrops,
   offlineSpells,
@@ -136,7 +138,13 @@ function buildIssueList({
   }
 
   if (camerasOk === false) {
-    issues.push({ code: 'cameras', message: manualNotes?.match(/cam/i) ? manualNotes : 'Camera issue (manual)', at, severity: 'medium' });
+    const camMsg =
+      cameraStatus?.badChannels?.length
+        ? `Cameras: maintenance Cam ${cameraStatus.badChannels.join(', ')}`
+        : manualNotes?.match(/cam/i)
+          ? manualNotes
+          : 'Camera issue (manual)';
+    issues.push({ code: 'cameras', message: camMsg, at, severity: 'medium' });
   }
 
   if (alarmCount > 0) {
@@ -231,7 +239,8 @@ function buildInspectionRow({
   const fuelAssessment = assessFuelSensor(fuelSeries, fuelEvents, dropThresholdL);
   const fuelSensorOk = fuelAssessment.ok;
 
-  const camerasOk = manual.camerasOk != null ? manual.camerasOk : null;
+  const camFromManual = cameraManual.toSummary(manual);
+  const camerasOk = manual.camerasOk != null ? manual.camerasOk : camFromManual.ok;
 
   const autoNotes = buildAutoNotesText({
     helionStatus,
@@ -250,6 +259,7 @@ function buildInspectionRow({
     antennaOk,
     offlineLabel,
     camerasOk,
+    cameraStatus: camFromManual.status,
     manualNotes: manual.notes,
     fuelDrops: fuelEvents?.filter((e) => e.type === 'drop'),
     offlineSpells: connectivity?.offlineSpells,

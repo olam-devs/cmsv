@@ -18,6 +18,7 @@ const {
 const { analyzeGpsTrack, buildInspectionRow } = require('../utils/daily-inspection');
 const { sortDailyReportRows } = require('../utils/daily-report-sort');
 const { enrichMonitorFields, enrichMonitorFieldsAsync } = require('../utils/report-monitor-fields');
+const cameraManual = require('../utils/camera-manual');
 const uptimeAnalytics = require('./uptime-analytics.service');
 
 const FILE = path.join(__dirname, '../../../data/daily-log.json');
@@ -207,11 +208,26 @@ function saveManualInspection(devIdno, reportDate, patch = {}, createdBy = null)
     meta.bundlePurchasedDate = d ? String(d).slice(0, 10) : null;
   }
 
+  let cameraStatus = prev.cameraStatus
+    ? cameraManual.normalizeCameraStatus(prev.cameraStatus)
+    : cameraManual.normalizeCameraStatus({ camerasOk: prev.camerasOk });
+
+  if (patch.cameraStatus !== undefined) {
+    cameraStatus = cameraManual.normalizeCameraStatus(patch.cameraStatus);
+  } else if (patch.camerasOk !== undefined) {
+    cameraStatus = cameraManual.normalizeCameraStatus({
+      camerasOk: patch.camerasOk,
+      badChannels: patch.badChannels || prev.badChannels,
+    });
+  }
+
   store.inspections[key] = {
     ...prev,
     devIdno: String(devIdno),
     reportDate: String(reportDate).slice(0, 10),
-    camerasOk: patch.camerasOk !== undefined ? patch.camerasOk : prev.camerasOk,
+    cameraStatus,
+    camerasOk: cameraManual.deriveCamerasOk(cameraStatus),
+    badChannels: cameraStatus.badChannels || [],
     notes: patch.notes !== undefined ? String(patch.notes) : prev.notes,
     updatedAt: now,
   };
@@ -220,7 +236,9 @@ function saveManualInspection(devIdno, reportDate, patch = {}, createdBy = null)
   save();
 
   const parts = [];
-  if (patch.camerasOk !== undefined) parts.push(`cameras=${patch.camerasOk ? 'OK' : 'issue'}`);
+  if (patch.cameraStatus !== undefined || patch.camerasOk !== undefined) {
+    parts.push(`cameras=${cameraManual.toNote(cameraStatus) || cameraStatus.mode}`);
+  }
   if (patch.notes !== undefined && patch.notes) parts.push('notes updated');
   if (patch.bundlePurchasedDate !== undefined) parts.push(`bundle=${meta.bundlePurchasedDate || 'cleared'}`);
 
@@ -243,13 +261,13 @@ function saveManualInspection(devIdno, reportDate, patch = {}, createdBy = null)
       createdBy,
     });
   }
-  if (patch.camerasOk !== undefined) {
+  if (patch.cameraStatus !== undefined || patch.camerasOk !== undefined) {
     createEntry({
       devIdno,
       plate: meta.plate,
-      manualNote: patch.camerasOk ? 'Cameras OK' : 'Camera issue',
+      manualNote: cameraManual.toNote(cameraStatus) || 'Camera check',
       reportDate,
-      fields: { type: 'cameras', camerasOk: patch.camerasOk },
+      fields: { type: 'cameras', cameraStatus, camerasOk: cameraManual.deriveCamerasOk(cameraStatus) },
       createdBy,
     });
   }
@@ -352,10 +370,19 @@ async function buildInspectionForVehicle(vehicle, reportDate, dropThresholdL) {
     reportDate,
     manual: {
       camerasOk: manual.camerasOk,
+      cameraStatus: manual.cameraStatus,
+      badChannels: manual.badChannels,
       notes: manual.notes || '',
       alarmCount: alarms.length,
     },
   });
+
+  const camSum = cameraManual.toSummary(
+    manual.cameraStatus || { camerasOk: manual.camerasOk, badChannels: manual.badChannels },
+  );
+  row.cameraStatus = camSum.status;
+  row.camerasLabel = camSum.label;
+  row.camerasOk = camSum.ok;
 
   row.manualEntries = listEntries({
     from: reportDate,

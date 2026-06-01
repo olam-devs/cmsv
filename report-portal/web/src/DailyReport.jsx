@@ -3,6 +3,8 @@ import { useTheme } from "./theme.jsx";
 import { Panel, Inp, Sel, Btn, ErrorBanner, Spinner, Empty, Badge } from "./ui/primitives.jsx";
 import { apiFetch, API_BASE, getToken, logout } from "./api.js";
 import { FuelCell, GprsCell, AntennaCell } from "./MonitorCells.jsx";
+import { cameraStatusFromRow, CamCellLabel } from "./CameraEditor.jsx";
+import VehicleEditDrawer from "./VehicleEditDrawer.jsx";
 
 const THRESHOLD_OPTIONS = [5, 10, 15, 20, 25, 30, 40, 50];
 const FUEL_DROP_FILTER = [5, 10, 20, 30, 50];
@@ -19,52 +21,6 @@ function fmtTs(isoOrStr) {
 function fmtDay(iso) {
   if (!iso) return "—";
   return String(iso).slice(0, 10);
-}
-
-function StatusCell({ ok, label, t }) {
-  if (ok === true) {
-    return (
-      <span title={label || "OK"} style={{ color: t.green, fontWeight: 800, fontSize: 16 }}>
-        ✓
-      </span>
-    );
-  }
-  if (ok === false) {
-    return (
-      <span title={label || "Issue"} style={{ color: t.red, fontWeight: 800, fontSize: 16 }}>
-        ✗
-      </span>
-    );
-  }
-  return <span style={{ color: t.muted }}>—</span>;
-}
-
-function TriToggle({ value, onChange, t }) {
-  const cycle = () => {
-    if (value === true) onChange(false);
-    else if (value === false) onChange(null);
-    else onChange(true);
-  };
-  return (
-    <button
-      type="button"
-      onClick={cycle}
-      title="Click: OK → Issue → not checked"
-      style={{
-        border: `1px solid ${t.border}`,
-        borderRadius: 8,
-        padding: "4px 10px",
-        background: value === true ? t.greenSoft : value === false ? t.redSoft : t.panel,
-        cursor: "pointer",
-        fontFamily: "inherit",
-        fontSize: 12,
-        fontWeight: 700,
-        color: value === true ? t.green : value === false ? t.red : t.textSoft,
-      }}
-    >
-      {value === true ? "✓ OK" : value === false ? "✗ Issue" : "—"}
-    </button>
-  );
 }
 
 export default function DailyReport({ username }) {
@@ -93,6 +49,7 @@ export default function DailyReport({ username }) {
   const [gprsGapHits, setGprsGapHits] = useState([]);
   const [gprsGapMin, setGprsGapMin] = useState(30);
   const [newNote, setNewNote] = useState("");
+  const [cameraDraft, setCameraDraft] = useState({ mode: "unchecked", badChannels: [] });
 
   useEffect(() => {
     apiFetch("/vehicles")
@@ -175,6 +132,15 @@ export default function DailyReport({ username }) {
     return () => clearInterval(id);
   }, [autoRefresh, reportRaw?.rows?.length, loadLiveRefresh]);
 
+  useEffect(() => {
+    if (!selectedDev) return undefined;
+    const onKey = (e) => {
+      if (e.key === "Escape") setSelectedDev(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selectedDev]);
+
   const loadAnalytics = useCallback(async () => {
     const minL = customFuelMin.trim() ? parseFloat(customFuelMin) : fuelDropMinL;
     try {
@@ -206,6 +172,7 @@ export default function DailyReport({ username }) {
     setNoteDraft(row.notes || "");
     setBundleDraft(row.bundlePurchasedDate || "");
     setNewNote("");
+    setCameraDraft(cameraStatusFromRow(row));
     try {
       const [hist, manual] = await Promise.all([
         apiFetch(`/daily-log/vehicle/${encodeURIComponent(row.devIdno)}/history`),
@@ -225,9 +192,13 @@ export default function DailyReport({ username }) {
     setError(null);
     try {
       const q = new URLSearchParams({ date: reportDate });
+      const cam =
+        patch.cameraStatus !== undefined ? patch.cameraStatus : cameraDraft;
       const body = {
+        cameraStatus: cam,
         camerasOk:
-          patch.camerasOk !== undefined ? patch.camerasOk : selected?.camerasOk,
+          cam.mode === "all_ok" ? true : cam.mode === "issues" ? false : null,
+        badChannels: cam.badChannels || [],
         notes: patch.notes !== undefined ? patch.notes : noteDraft,
         bundlePurchasedDate:
           patch.bundlePurchasedDate !== undefined
@@ -524,17 +495,10 @@ export default function DailyReport({ username }) {
         </Panel>
       )}
 
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: selected ? "1fr minmax(280px, 340px)" : "1fr",
-          gap: 16,
-        }}
+      <Panel
+        title={`Fleet table — CMS day ${reportDate}`}
+        subtitle="Click a row to edit cameras & notes. Table scrolls independently — close edit panel with ×."
       >
-        <Panel
-          title={`Fleet table — CMS day ${reportDate}`}
-          subtitle="BUNDLE = last internet bundle · LAST SYNC = CMS pull time"
-        >
           {loading && !report ? (
             <Spinner label="Building report from CMSV — can take 1–2 minutes…" />
           ) : !filteredRows.length && !loading && !reportRaw ? (
@@ -550,9 +514,18 @@ export default function DailyReport({ username }) {
               }
             />
           ) : (
-            <div style={{ overflowX: "auto", opacity: loading ? 0.65 : 1 }}>
+            <div
+              style={{
+                maxHeight: "calc(100vh - 300px)",
+                overflow: "auto",
+                scrollBehavior: "smooth",
+                border: `1px solid ${t.border}`,
+                borderRadius: 10,
+                opacity: loading ? 0.65 : 1,
+              }}
+            >
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-                <thead>
+                <thead style={{ position: "sticky", top: 0, zIndex: 3 }}>
                   <tr style={{ background: "#1a3a5c", color: "#fff" }}>
                     {[
                       "NO",
@@ -601,6 +574,7 @@ export default function DailyReport({ username }) {
                           background: active ? t.accentSoft : rowBg,
                           cursor: "pointer",
                           borderBottom: `1px solid ${t.border}`,
+                          boxShadow: active ? `inset 0 0 0 2px ${t.accent}` : undefined,
                         }}
                       >
                         <td style={{ padding: 8 }}>{row.no ?? idx + 1}</td>
@@ -616,18 +590,8 @@ export default function DailyReport({ username }) {
                         <td style={{ padding: 8, fontSize: 10, color: t.textSoft }}>
                           {row.lastGpsUploadAt ? fmtTs(row.lastGpsUploadAt) : "—"}
                         </td>
-                        <td style={{ padding: 8 }} onClick={(e) => e.stopPropagation()}>
-                          {active ? (
-                            <TriToggle
-                              value={row.camerasOk}
-                              onChange={(v) =>
-                                saveManual({ camerasOk: v, notes: noteDraft })
-                              }
-                              t={t}
-                            />
-                          ) : (
-                            <StatusCell ok={row.camerasOk} t={t} />
-                          )}
+                        <td style={{ padding: 8 }}>
+                          <CamCellLabel row={row} t={t} />
                         </td>
                         <td style={{ padding: 8 }}>
                           <FuelCell row={row} />
@@ -659,116 +623,31 @@ export default function DailyReport({ username }) {
           )}
         </Panel>
 
-        {selected && (
-          <Panel title={selected.plate} subtitle="Per-vehicle record">
-            <Inp
-              label="Data bundle purchased"
-              type="date"
-              value={bundleDraft}
-              onChange={(e) => setBundleDraft(e.target.value)}
-            />
-            <div style={{ marginTop: 12, fontSize: 12, color: t.textSoft }}>
-              {selected.autoNotes}
-            </div>
-            <div style={{ marginTop: 12 }}>
-              <div style={{ fontSize: 11, fontWeight: 700, marginBottom: 6 }}>Cameras</div>
-              <TriToggle
-                value={selected.camerasOk}
-                onChange={(v) => saveManual({ camerasOk: v, notes: noteDraft })}
-                t={t}
-              />
-            </div>
-            <div style={{ marginTop: 12 }}>
-              <div style={{ fontSize: 11, fontWeight: 700, marginBottom: 6 }}>Notes</div>
-              <textarea
-                value={noteDraft}
-                onChange={(e) => setNoteDraft(e.target.value)}
-                rows={4}
-                style={{
-                  width: "100%",
-                  boxSizing: "border-box",
-                  borderRadius: 10,
-                  border: `1px solid ${t.border}`,
-                  padding: 10,
-                  fontFamily: "inherit",
-                  fontSize: 12,
-                }}
-              />
-              <Btn
-                onClick={() =>
-                  saveManual({
-                    camerasOk: selected.camerasOk,
-                    notes: noteDraft,
-                    bundlePurchasedDate: bundleDraft || null,
-                  })
-                }
-                disabled={saving}
-                style={{ marginTop: 8 }}
-              >
-                {saving ? "Saving…" : "Save"}
-              </Btn>
-            </div>
-            <div style={{ marginTop: 14, borderTop: `1px solid ${t.border}`, paddingTop: 12 }}>
-              <div style={{ fontSize: 11, fontWeight: 700, marginBottom: 6 }}>Add new note record</div>
-              <textarea
-                value={newNote}
-                onChange={(e) => setNewNote(e.target.value)}
-                rows={2}
-                placeholder="New monitoring note (saved as separate history entry)…"
-                style={{
-                  width: "100%",
-                  boxSizing: "border-box",
-                  borderRadius: 8,
-                  border: `1px solid ${t.border}`,
-                  padding: 8,
-                  fontFamily: "inherit",
-                  fontSize: 12,
-                }}
-              />
-              <Btn onClick={addManualNote} disabled={saving || !newNote.trim()} style={{ marginTop: 6 }}>
-                Add history entry
-              </Btn>
-            </div>
-            {manualHistory.length > 0 && (
-              <div style={{ marginTop: 14, borderTop: `1px solid ${t.border}`, paddingTop: 12 }}>
-                <div style={{ fontSize: 11, fontWeight: 700, marginBottom: 8 }}>All manual records</div>
-                <div style={{ maxHeight: 200, overflowY: "auto", fontSize: 10 }}>
-                  {manualHistory.map((ent) => (
-                    <div
-                      key={ent.id}
-                      style={{
-                        marginBottom: 8,
-                        padding: 8,
-                        background: t.bg,
-                        borderRadius: 8,
-                        borderLeft: `3px solid ${ent.fields?.type === "cameras" ? t.orange : t.accent}`,
-                      }}
-                    >
-                      <div style={{ fontWeight: 700 }}>
-                        {ent.fields?.type || "note"} · {fmtDay(ent.reportDate)} · {fmtTs(ent.recordedAt)}
-                      </div>
-                      {ent.createdBy && (
-                        <div style={{ color: t.muted }}>by {ent.createdBy}</div>
-                      )}
-                      <div style={{ marginTop: 4 }}>{ent.manualNote || "—"}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-            {updateHistory?.syncLog?.length > 0 && (
-              <div style={{ marginTop: 14, fontSize: 10, color: t.textSoft }}>
-                <div style={{ fontWeight: 700, marginBottom: 6 }}>CMS sync log</div>
-                {updateHistory.syncLog.slice(0, 8).map((ev) => (
-                  <div key={ev.id} style={{ marginBottom: 4 }}>
-                    {ev.type === "cms_sync" ? "CMS sync" : "Edited"} · {fmtTs(ev.at)}
-                  </div>
-                ))}
-              </div>
-            )}
-          </Panel>
-        )}
-      </div>
+      <VehicleEditDrawer
+        selected={selected}
+        bundleDraft={bundleDraft}
+        setBundleDraft={setBundleDraft}
+        cameraDraft={cameraDraft}
+        setCameraDraft={setCameraDraft}
+        noteDraft={noteDraft}
+        setNoteDraft={setNoteDraft}
+        newNote={newNote}
+        setNewNote={setNewNote}
+        manualHistory={manualHistory}
+        updateHistory={updateHistory}
+        saving={saving}
+        onSave={() =>
+          saveManual({
+            cameraStatus: cameraDraft,
+            notes: noteDraft,
+            bundlePurchasedDate: bundleDraft || null,
+          })
+        }
+        onAddNote={addManualNote}
+        onClose={() => setSelectedDev(null)}
+        fmtTs={fmtTs}
+        fmtDay={fmtDay}
+      />
     </div>
   );
 }

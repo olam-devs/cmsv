@@ -119,7 +119,7 @@ router.get('/daily-log/vehicle/:id/history', async (req, res) => {
 router.patch('/daily-log/report/:id', async (req, res) => {
   const devIdno = await resolveDevIdno(req.params.id);
   const date = (req.query.date || req.body?.reportDate || dailyLog.todayStr()).slice(0, 10);
-  const { camerasOk, notes, bundlePurchasedDate } = req.body || {};
+  const { camerasOk, cameraStatus, badChannels, notes, bundlePurchasedDate } = req.body || {};
   let vehicles;
   try {
     vehicles = await cms.getVehicles();
@@ -130,7 +130,14 @@ router.patch('/daily-log/report/:id', async (req, res) => {
   const saved = dailyLog.saveManualInspection(
     devIdno,
     date,
-    { camerasOk, notes, bundlePurchasedDate, plate: v.plate || v.nm },
+    {
+      camerasOk,
+      cameraStatus,
+      badChannels,
+      notes,
+      bundlePurchasedDate,
+      plate: v.plate || v.nm,
+    },
     req.user?.username || null,
   );
   const row = await dailyLog.buildInspectionForVehicle(v, date, dailyLog.getSettings().defaultDropThresholdL);
