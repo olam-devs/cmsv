@@ -175,6 +175,46 @@ router.post('/daily-log/bulk-bundle', async (req, res) => {
   ok(res, result);
 });
 
+/** Bulk driver: body { devIdnos, driverPhone?, driverComment? } */
+router.post('/daily-log/bulk-driver', async (req, res) => {
+  const { devIdnos, driverPhone, driverComment } = req.body || {};
+  if (!Array.isArray(devIdnos) || !devIdnos.length) {
+    return err(res, 'devIdnos array required', 400);
+  }
+  ok(
+    res,
+    dailyLog.bulkAssignDriverToVehicles({
+      devIdnos,
+      driverPhone: driverPhone != null ? String(driverPhone).trim() : null,
+      driverComment: driverComment != null ? String(driverComment).trim() : null,
+    }),
+  );
+});
+
+/** Bulk driver paste: body { updates: [{ plate?, devIdno?, driverPhone, driverComment? }] } */
+router.post('/admin/bulk-drivers', requireAdmin, async (req, res) => {
+  const updates = req.body?.updates;
+  if (!Array.isArray(updates)) return err(res, 'updates array required', 400);
+  let vehicles = [];
+  try {
+    vehicles = await cms.getVehicles();
+  } catch (_) {}
+  const plateToDev = new Map();
+  for (const v of vehicles) {
+    const key = dailyLog.normPlateKey(v.plate || v.nm);
+    if (key && v.devIdno) plateToDev.set(key, String(v.devIdno));
+  }
+  const resolved = updates.map((u) => {
+    let devIdno = u.devIdno ? String(u.devIdno).trim() : '';
+    const plate = u.plate ? String(u.plate).trim() : '';
+    if (!devIdno && plate) {
+      devIdno = plateToDev.get(dailyLog.normPlateKey(plate)) || '';
+    }
+    return { ...u, devIdno: devIdno || u.devIdno, plate };
+  });
+  ok(res, dailyLog.bulkUpdateDriverInfo(resolved));
+});
+
 async function resolveDevIdno(id) {
   const s = String(id || '').trim();
   const vehicles = await cms.getVehicles();
@@ -318,6 +358,8 @@ router.patch('/daily-log/report/:id', async (req, res) => {
     bundleDurationDays,
     simPhone,
     vehicleComment,
+    driverPhone,
+    driverComment,
   } = req.body || {};
   let vehicles;
   try {
@@ -338,6 +380,8 @@ router.patch('/daily-log/report/:id', async (req, res) => {
       bundleDurationDays,
       simPhone,
       vehicleComment,
+      driverPhone,
+      driverComment,
       plate: v.plate || v.nm,
     },
     req.user?.username || null,

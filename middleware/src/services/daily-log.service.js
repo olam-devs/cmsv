@@ -36,6 +36,30 @@ let store = {
   settings: { defaultDropThresholdL: 20 },
 };
 
+const MANUAL_META_FIELDS = [
+  'vehicleComment',
+  'simPhone',
+  'driverPhone',
+  'driverComment',
+  'bundlePurchasedDate',
+  'bundleDurationDays',
+];
+
+function mergeVehicleMetaEntry(diskEntry, memEntry) {
+  const disk = diskEntry || {};
+  const mem = memEntry || {};
+  const out = { ...disk, ...mem };
+  for (const f of MANUAL_META_FIELDS) {
+    const mv = mem[f];
+    const dv = disk[f];
+    if (mv != null && mv !== '') out[f] = mv;
+    else if (dv != null && dv !== '') out[f] = dv;
+    else if (mv !== undefined) out[f] = mv;
+    else out[f] = dv ?? null;
+  }
+  return out;
+}
+
 function load() {
   try {
     if (fs.existsSync(FILE)) {
@@ -56,7 +80,7 @@ function refreshVehicleMetaFromDisk() {
     const raw = JSON.parse(fs.readFileSync(FILE, 'utf8'));
     const disk = raw.vehicleMeta || {};
     for (const [id, dm] of Object.entries(disk)) {
-      store.vehicleMeta[id] = { ...dm, ...(store.vehicleMeta[id] || {}) };
+      store.vehicleMeta[id] = mergeVehicleMetaEntry(dm, store.vehicleMeta[id]);
     }
   } catch (_) {}
 }
@@ -204,6 +228,8 @@ function ensureVehicleMeta(devIdno, plate = '') {
       bundleDurationDays: null,
       simPhone: null,
       vehicleComment: null,
+      driverPhone: null,
+      driverComment: null,
       lastCmsSyncAt: null,
       lastManualEditAt: null,
       lastGpsUploadAt: null,
@@ -253,6 +279,14 @@ function saveManualInspection(devIdno, reportDate, patch = {}, createdBy = null)
     const c = String(patch.vehicleComment || '').trim();
     meta.vehicleComment = c || null;
   }
+  if (patch.driverPhone !== undefined) {
+    const p = String(patch.driverPhone || '').trim();
+    meta.driverPhone = p || null;
+  }
+  if (patch.driverComment !== undefined) {
+    const c = String(patch.driverComment || '').trim();
+    meta.driverComment = c || null;
+  }
 
   let cameraStatus = prev.cameraStatus
     ? cameraManual.normalizeCameraStatus(prev.cameraStatus)
@@ -298,6 +332,7 @@ function saveManualInspection(devIdno, reportDate, patch = {}, createdBy = null)
   }
   if (patch.simPhone !== undefined) parts.push('sim updated');
   if (patch.vehicleComment !== undefined) parts.push('tag updated');
+  if (patch.driverPhone !== undefined || patch.driverComment !== undefined) parts.push('driver updated');
 
   if (parts.length) {
     pushSyncLog({
@@ -330,6 +365,8 @@ function enrichRowFromMeta(row, devIdno, reportDate) {
   const manual = getManualInspection(devIdno, reportDate);
   attachBundleFields(row, meta);
   row.vehicleComment = meta.vehicleComment || null;
+  row.driverPhone = meta.driverPhone || null;
+  row.driverComment = meta.driverComment || null;
   row.notes = manual.notes != null ? manual.notes : row.notes || '';
   row.camerasEditedBy = manual.lastCameraEditedBy || null;
   row.camerasEditedAt = manual.lastCameraEditedAt || null;
@@ -417,6 +454,48 @@ function bulkUpdateSimPhones(updates = [], opts = {}) {
   }
   if (count) save();
   return { updated: count, skipped: skipped.length ? skipped : undefined };
+}
+
+function bulkUpdateDriverInfo(updates = [], opts = {}) {
+  const onlyIfEmpty = opts.onlyIfEmpty === true;
+  let count = 0;
+  for (const u of updates) {
+    const devIdno = u.devIdno ? String(u.devIdno).trim() : '';
+    const plate = u.plate ? String(u.plate).trim() : '';
+    let id = devIdno;
+    if (!id && plate) {
+      const key = normPlateKey(plate);
+      const hit = Object.values(store.vehicleMeta).find(
+        (m) => normPlateKey(m.plate) === key,
+      );
+      if (hit) id = hit.devIdno;
+    }
+    if (!id) continue;
+    const meta = ensureVehicleMeta(id, plate || undefined);
+    const phone = u.driverPhone != null ? String(u.driverPhone).trim() : null;
+    const comment = u.driverComment != null ? String(u.driverComment).trim() : null;
+    if (phone !== null) {
+      if (onlyIfEmpty && meta.driverPhone) continue;
+      meta.driverPhone = phone || null;
+    }
+    if (comment !== null) {
+      if (onlyIfEmpty && meta.driverComment) continue;
+      meta.driverComment = comment || null;
+    }
+    if (phone !== null || comment !== null) count += 1;
+  }
+  if (count) save();
+  return { updated: count };
+}
+
+function bulkAssignDriverToVehicles({ devIdnos = [], driverPhone, driverComment }) {
+  const ids = [...new Set(devIdnos.map((id) => String(id).trim()).filter(Boolean))];
+  const updates = ids.map((devIdno) => ({
+    devIdno,
+    driverPhone: driverPhone !== undefined ? driverPhone : undefined,
+    driverComment: driverComment !== undefined ? driverComment : undefined,
+  }));
+  return bulkUpdateDriverInfo(updates);
 }
 
 function bulkAssignBundles({ devIdnos = [], bundlePurchasedDate, bundleDurationDays }) {
@@ -983,6 +1062,8 @@ module.exports = {
   enrichRowFromMeta,
   buildQuickRowForVehicle,
   bulkUpdateSimPhones,
+  bulkUpdateDriverInfo,
+  bulkAssignDriverToVehicles,
   bulkAssignBundles,
   normPlateKey,
   sortDailyReportRows,

@@ -15,6 +15,8 @@ export default function UsersAdmin({ user }) {
   const [role, setRole] = useState("user");
   const [bulkPhones, setBulkPhones] = useState("");
   const [bulkResult, setBulkResult] = useState(null);
+  const [bulkDrivers, setBulkDrivers] = useState("");
+  const [bulkDriverResult, setBulkDriverResult] = useState(null);
 
   const isAdmin = user?.role === "admin";
 
@@ -95,6 +97,38 @@ export default function UsersAdmin({ user }) {
       const res = await apiFetch("/admin/bulk-phones", { method: "POST", body: { updates } });
       setBulkResult(res);
       setBulkPhones("");
+    } catch (e) {
+      setErr(e.message || String(e));
+    }
+  };
+
+  const importDrivers = async () => {
+    setErr("");
+    setBulkDriverResult(null);
+    const lines = bulkDrivers
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean);
+    const updates = [];
+    for (const line of lines) {
+      const parts = line.split(/[,\t|]/).map((p) => p.trim()).filter(Boolean);
+      if (parts.length < 2) continue;
+      if (parts.length >= 3) {
+        const [plate, driverPhone, driverComment] = parts;
+        updates.push({ plate, driverPhone, driverComment });
+        continue;
+      }
+      const [plate, driverPhone] = parts;
+      updates.push({ plate, driverPhone });
+    }
+    if (!updates.length) {
+      setErr("No valid lines. Use: plate,driverPhone or plate,driverPhone,driverName per line.");
+      return;
+    }
+    try {
+      const res = await apiFetch("/admin/bulk-drivers", { method: "POST", body: { updates } });
+      setBulkDriverResult(res);
+      setBulkDrivers("");
     } catch (e) {
       setErr(e.message || String(e));
     }
@@ -216,6 +250,35 @@ export default function UsersAdmin({ user }) {
         {bulkResult?.updated != null && (
           <div style={{ marginTop: 8, fontSize: 12, color: t.textSoft }}>
             Updated <strong>{bulkResult.updated}</strong> vehicle(s).
+          </div>
+        )}
+      </Panel>
+
+      <Panel
+        title="Bulk driver import"
+        subtitle="One line per vehicle: plate,driverPhone or plate,driverPhone,driverName"
+      >
+        <textarea
+          value={bulkDrivers}
+          onChange={(e) => setBulkDrivers(e.target.value)}
+          rows={8}
+          placeholder={"T 765 EMX,255700000001,John\nT 774 EMX,255700000002"}
+          style={{
+            width: "100%",
+            boxSizing: "border-box",
+            borderRadius: 10,
+            border: `1px solid ${t.border}`,
+            padding: 10,
+            fontFamily: "inherit",
+            fontSize: 12,
+          }}
+        />
+        <Btn onClick={importDrivers} disabled={!bulkDrivers.trim()} style={{ marginTop: 8 }}>
+          Import drivers
+        </Btn>
+        {bulkDriverResult?.updated != null && (
+          <div style={{ marginTop: 8, fontSize: 12, color: t.textSoft }}>
+            Updated <strong>{bulkDriverResult.updated}</strong> vehicle(s).
           </div>
         )}
       </Panel>

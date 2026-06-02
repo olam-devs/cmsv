@@ -12,6 +12,10 @@ export default function VehicleEditDrawer({
   setSimPhoneDraft,
   vehicleCommentDraft,
   setVehicleCommentDraft,
+  driverPhoneDraft,
+  setDriverPhoneDraft,
+  driverCommentDraft,
+  setDriverCommentDraft,
   cameraDraft,
   setCameraDraft,
   noteDraft,
@@ -120,6 +124,21 @@ export default function VehicleEditDrawer({
           />
           <div style={{ fontSize: 10, color: t.textSoft, marginTop: -4, marginBottom: 8 }}>
             Shown as a yellow badge under the plate in the fleet table.
+          </div>
+
+          <div style={{ marginTop: 12 }}>
+            <Inp
+              label="Driver phone"
+              value={driverPhoneDraft}
+              onChange={(e) => setDriverPhoneDraft(e.target.value)}
+              placeholder="255… or 07…"
+            />
+            <Inp
+              label="Driver name / note"
+              value={driverCommentDraft}
+              onChange={(e) => setDriverCommentDraft(e.target.value)}
+              placeholder="Driver name shown under driver phone"
+            />
           </div>
 
           <div style={{ marginTop: 12 }}>

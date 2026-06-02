@@ -7,6 +7,7 @@ import { cameraStatusFromRow, CamCellLabel } from "./CameraEditor.jsx";
 import VehicleEditDrawer from "./VehicleEditDrawer.jsx";
 import AnalyticsPanel from "./AnalyticsPanel.jsx";
 import { sortReportRows } from "./reportSort.js";
+import { mergeManualRowFields } from "./rowMerge.js";
 
 const THRESHOLD_OPTIONS = [5, 10, 15, 20, 25, 30, 40, 50];
 const LIVE_REFRESH_MS = 10000;
@@ -91,6 +92,11 @@ export default function DailyReport({ username, user }) {
   const [bulkBundleDays, setBulkBundleDays] = useState("30");
   const [bulkApplying, setBulkApplying] = useState(false);
   const [vehicleCommentDraft, setVehicleCommentDraft] = useState("");
+  const [driverPhoneDraft, setDriverPhoneDraft] = useState("");
+  const [driverCommentDraft, setDriverCommentDraft] = useState("");
+  const [bulkDriverPhone, setBulkDriverPhone] = useState("");
+  const [bulkDriverComment, setBulkDriverComment] = useState("");
+  const [bulkDriverApplying, setBulkDriverApplying] = useState(false);
   const [syncCountdown, setSyncCountdown] = useState(LIVE_REFRESH_MS / 1000);
   const [liveSyncing, setLiveSyncing] = useState(false);
 
@@ -122,8 +128,10 @@ export default function DailyReport({ username, user }) {
           data = await apiFetch(`/daily-log/report?${q}`, { timeoutMs: 300000 });
         }
         if (gen !== loadGenRef.current) return;
-        setReportRaw(
-          data?.rows?.length ? { ...data, rows: sortReportRows(data.rows) } : data,
+        setReportRaw((prev) =>
+          data?.rows?.length
+            ? { ...data, rows: sortReportRows(mergeManualRowFields(prev?.rows, data.rows)) }
+            : data,
         );
       } catch (e) {
         if (gen !== loadGenRef.current) return;
@@ -154,7 +162,9 @@ export default function DailyReport({ username, user }) {
             prev
               ? {
                   ...prev,
-                  rows: sortReportRows(data.rows),
+                  rows: sortReportRows(
+                    mergeManualRowFields(prev.rows, data.rows),
+                  ),
                   liveRefreshedAt: data.reportRefreshedAt,
                 }
               : prev,
@@ -166,7 +176,13 @@ export default function DailyReport({ username, user }) {
         if (data?.rows?.length) {
           setReportRaw((prev) =>
             prev
-              ? { ...prev, rows: sortReportRows(data.rows), liveRefreshedAt: data.refreshedAt }
+              ? {
+                  ...prev,
+                  rows: sortReportRows(
+                    mergeManualRowFields(prev.rows, data.rows),
+                  ),
+                  liveRefreshedAt: data.refreshedAt,
+                }
               : prev,
           );
           setLiveTick(data.refreshedAt);
@@ -246,6 +262,8 @@ export default function DailyReport({ username, user }) {
     );
     setSimPhoneDraft(row.sim || "");
     setVehicleCommentDraft(row.vehicleComment || "");
+    setDriverPhoneDraft(row.driverPhone || "");
+    setDriverCommentDraft(row.driverComment || "");
     setNewNote("");
     setCameraDraft(cameraStatusFromRow(row));
     try {
@@ -258,6 +276,8 @@ export default function DailyReport({ username, user }) {
       setManualHistory(Array.isArray(manual) ? manual : []);
       if (meta) {
         setVehicleCommentDraft(meta.vehicleComment || "");
+        setDriverPhoneDraft(meta.driverPhone || "");
+        setDriverCommentDraft(meta.driverComment || "");
         if (meta.simPhone) setSimPhoneDraft(meta.simPhone);
         if (meta.bundlePurchasedDate) setBundleDraft(meta.bundlePurchasedDate);
         if (meta.bundleDurationDays != null) {
@@ -272,6 +292,8 @@ export default function DailyReport({ username, user }) {
                 ? {
                     ...r,
                     vehicleComment: meta.vehicleComment || null,
+                    driverPhone: meta.driverPhone || null,
+                    driverComment: meta.driverComment || null,
                     sim: meta.simPhone || r.sim,
                     bundlePurchasedDate: meta.bundlePurchasedDate ?? r.bundlePurchasedDate,
                     bundleDurationDays: meta.bundleDurationDays ?? r.bundleDurationDays,
@@ -317,6 +339,14 @@ export default function DailyReport({ username, user }) {
           patch.vehicleComment !== undefined
             ? patch.vehicleComment
             : vehicleCommentDraft.trim() || null,
+        driverPhone:
+          patch.driverPhone !== undefined
+            ? patch.driverPhone
+            : driverPhoneDraft.trim() || null,
+        driverComment:
+          patch.driverComment !== undefined
+            ? patch.driverComment
+            : driverCommentDraft.trim() || null,
         rowNo: report?.rows?.find((r) => r.devIdno === selectedDev)?.no,
       };
       const res = await apiFetch(
@@ -331,6 +361,14 @@ export default function DailyReport({ username, user }) {
           meta?.vehicleComment ??
           row?.vehicleComment ??
           (vehicleCommentDraft.trim() || null),
+        driverPhone:
+          meta?.driverPhone ??
+          row?.driverPhone ??
+          (driverPhoneDraft.trim() || null),
+        driverComment:
+          meta?.driverComment ??
+          row?.driverComment ??
+          (driverCommentDraft.trim() || null),
         sim: meta?.simPhone ?? row?.sim,
       };
       setReportRaw((prev) => {
@@ -357,6 +395,8 @@ export default function DailyReport({ username, user }) {
       } else if (mergedRow.vehicleComment != null) {
         setVehicleCommentDraft(mergedRow.vehicleComment || "");
       }
+      if (meta?.driverPhone != null) setDriverPhoneDraft(meta.driverPhone || "");
+      if (meta?.driverComment != null) setDriverCommentDraft(meta.driverComment || "");
       if (patch.notes != null) setNoteDraft(patch.notes);
       if (body.bundlePurchasedDate != null)
         setBundleDraft(body.bundlePurchasedDate || "");
@@ -435,7 +475,9 @@ export default function DailyReport({ username, user }) {
         (r) =>
           String(r.plate || "").toLowerCase().includes(q) ||
           String(r.devIdno || "").toLowerCase().includes(q) ||
-          String(r.sim || "").toLowerCase().includes(q),
+          String(r.sim || "").toLowerCase().includes(q) ||
+          String(r.driverPhone || "").toLowerCase().includes(q) ||
+          String(r.driverComment || "").toLowerCase().includes(q),
       );
     }
     if (statusFilter === "online") rows = rows.filter((r) => r.helionStatus === "connected");
@@ -499,6 +541,49 @@ export default function DailyReport({ username, user }) {
     } finally {
       savingRef.current = false;
       setBulkApplying(false);
+    }
+  };
+
+  const applyBulkDriver = async () => {
+    if (!checkedCount || (!bulkDriverPhone.trim() && !bulkDriverComment.trim())) return;
+    if (savingRef.current) return;
+    savingRef.current = true;
+    setBulkDriverApplying(true);
+    setError(null);
+    try {
+      const devIdnos = [...checkedDevs];
+      await apiFetch("/daily-log/bulk-driver", {
+        method: "POST",
+        body: {
+          devIdnos,
+          driverPhone: bulkDriverPhone.trim() || null,
+          driverComment: bulkDriverComment.trim() || null,
+        },
+      });
+      setReportRaw((prev) => {
+        if (!prev) return prev;
+        const idSet = new Set(devIdnos);
+        return {
+          ...prev,
+          rows: sortReportRows(
+            prev.rows.map((r) =>
+              idSet.has(r.devIdno)
+                ? {
+                    ...r,
+                    driverPhone: bulkDriverPhone.trim() || r.driverPhone,
+                    driverComment: bulkDriverComment.trim() || r.driverComment,
+                  }
+                : r,
+            ),
+          ),
+        };
+      });
+      clearChecked();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      savingRef.current = false;
+      setBulkDriverApplying(false);
     }
   };
 
@@ -585,6 +670,25 @@ export default function DailyReport({ username, user }) {
       >
         {bulkApplying ? "Applying…" : `Set bundle (${checkedCount})`}
       </Btn>
+      <Btn
+        type="button"
+        onClick={applyBulkDriver}
+        disabled={!checkedCount || bulkDriverApplying || (!bulkDriverPhone.trim() && !bulkDriverComment.trim())}
+      >
+        {bulkDriverApplying ? "Applying…" : `Set driver (${checkedCount})`}
+      </Btn>
+      <Inp
+        label="Driver phone (bulk)"
+        value={bulkDriverPhone}
+        onChange={(e) => setBulkDriverPhone(e.target.value)}
+        placeholder="255… or 07…"
+      />
+      <Inp
+        label="Driver name (bulk)"
+        value={bulkDriverComment}
+        onChange={(e) => setBulkDriverComment(e.target.value)}
+        placeholder="Driver name"
+      />
       <Btn onClick={() => setTableFull((v) => !v)} disabled={!report?.rows?.length}>
         {tableFull ? "Exit full screen" : "Full screen"}
       </Btn>
@@ -860,6 +964,7 @@ export default function DailyReport({ username, user }) {
                       "PLATE",
                       "DEVICE",
                       "SIM",
+                      "DRIVER",
                       "BUNDLE",
                       "CAM",
                       "FUEL",
@@ -939,6 +1044,28 @@ export default function DailyReport({ username, user }) {
                         <td style={{ padding: 8, fontSize: 11 }}>{row.devIdno}</td>
                         <td style={{ padding: 8, fontSize: 11, fontFamily: "monospace" }}>
                           {row.sim || "—"}
+                        </td>
+                        <td style={{ padding: 8, fontSize: 11, minWidth: 100 }}>
+                          <div style={{ fontFamily: "monospace" }}>
+                            {row.driverPhone || "—"}
+                          </div>
+                          {row.driverComment ? (
+                            <span
+                              style={{
+                                display: "inline-block",
+                                marginTop: 4,
+                                padding: "2px 7px",
+                                borderRadius: 6,
+                                fontSize: 10,
+                                fontWeight: 700,
+                                background: "#dbeafe",
+                                color: "#1e40af",
+                                border: "1px solid #93c5fd",
+                              }}
+                            >
+                              {row.driverComment}
+                            </span>
+                          ) : null}
                         </td>
                         <td
                           style={{
@@ -1060,6 +1187,10 @@ export default function DailyReport({ username, user }) {
         setSimPhoneDraft={setSimPhoneDraft}
         vehicleCommentDraft={vehicleCommentDraft}
         setVehicleCommentDraft={setVehicleCommentDraft}
+        driverPhoneDraft={driverPhoneDraft}
+        setDriverPhoneDraft={setDriverPhoneDraft}
+        driverCommentDraft={driverCommentDraft}
+        setDriverCommentDraft={setDriverCommentDraft}
         cameraDraft={cameraDraft}
         setCameraDraft={setCameraDraft}
         noteDraft={noteDraft}
@@ -1076,6 +1207,8 @@ export default function DailyReport({ username, user }) {
             bundleDurationDays: bundleDurationDraft,
             simPhone: simPhoneDraft.trim() || null,
             vehicleComment: vehicleCommentDraft.trim() || null,
+            driverPhone: driverPhoneDraft.trim() || null,
+            driverComment: driverCommentDraft.trim() || null,
           })
         }
         onAddNote={addManualNote}
