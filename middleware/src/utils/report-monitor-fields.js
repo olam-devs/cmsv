@@ -43,12 +43,18 @@ function enrichMonitorFields(row, asOfMs = Date.now()) {
   const gprsAt = row.connectivity?.lastGpsAt || live?.gpsTime || row.lastGpsUploadAt;
   const gprsAge = ageSecondsFromNow(gprsAt, asOfMs);
   const gprsLevel = stalenessLevel(gprsAge, GPRS_WARN_SEC, GPRS_ERR_SEC);
+  const speed = live?.speed != null ? Number(live.speed) : null;
+  const moving = speed != null ? speed >= 3 : null;
   row.gprsDisplay = {
     location: row.gprsLocation || pickLocationName(live) || '—',
     updatedAt: gprsAt || null,
     ageLabel: gprsAge != null ? formatDurationShort(gprsAge) : 'Never',
     stale: gprsLevel === 'warn' || gprsLevel === 'error',
     status: !gprsAt ? 'none' : gprsLevel,
+    lat: live?.lat ?? null,
+    lng: live?.lng ?? null,
+    speed,
+    moving,
   };
 
   const offSecs = row.offlineDurationSecs || 0;

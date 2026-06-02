@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { apiFetch, getToken } from "./api.js";
 import Login from "./Login.jsx";
 import DailyReport from "./DailyReport.jsx";
+import UsersAdmin from "./UsersAdmin.jsx";
 import { Spinner } from "./ui/primitives.jsx";
 
 export default function App() {
@@ -30,9 +31,16 @@ export default function App() {
   if (checking) return <Spinner label="Loading…" />;
   if (!user) return null;
 
+  const route = typeof window !== "undefined" ? window.location.pathname.replace(/\/$/, "") : "";
+  const isUsersAdmin = route === "/admin/users";
+
   return (
     <div style={{ maxWidth: 1400, margin: "0 auto", padding: "16px 20px 40px" }}>
-      <DailyReport username={user.username} />
+      {isUsersAdmin ? (
+        <UsersAdmin user={user} />
+      ) : (
+        <DailyReport username={user.username} user={user} />
+      )}
     </div>
   );
 }

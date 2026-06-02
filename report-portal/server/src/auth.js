@@ -1,4 +1,5 @@
 const jwt = require('jsonwebtoken');
+const users = require('./users-store');
 
 function getSecret() {
   const s =
@@ -16,14 +17,19 @@ function portalCredentials() {
 }
 
 function verifyLogin(username, password) {
-  const { username: u, password: p } = portalCredentials();
-  return String(username || '').trim() === u && String(password || '') === p;
+  const un = String(username || '').trim();
+  const pw = String(password || '');
+  const { username: adminU, password: adminP } = portalCredentials();
+  if (un === adminU && pw === adminP) return { ok: true, username: un, role: 'admin' };
+  const hit = users.findUser(un);
+  if (!hit) return { ok: false };
+  if (!users.verifyPassword(pw, hit.passwordHash)) return { ok: false };
+  return { ok: true, username: hit.username, role: hit.role === 'admin' ? 'admin' : 'user' };
 }
 
-function signReportUser() {
-  const { username } = portalCredentials();
+function signReportUser({ username, role }) {
   return jwt.sign(
-    { sub: 'report-portal', username, kind: 'report' },
+    { sub: 'report-portal', username, role: role === 'admin' ? 'admin' : 'user', kind: 'report' },
     getSecret(),
     { expiresIn: process.env.REPORT_JWT_EXPIRES_IN || '12h' },
   );

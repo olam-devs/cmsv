@@ -28,7 +28,7 @@ function fmtDay(iso) {
   return String(iso).slice(0, 10);
 }
 
-export default function DailyReport({ username }) {
+export default function DailyReport({ username, user }) {
   const { t } = useTheme();
   const today = fuelTodayIso();
   const [vehicles, setVehicles] = useState([]);
@@ -327,25 +327,45 @@ export default function DailyReport({ username }) {
         <div style={{ fontSize: 13, color: t.textSoft }}>
           Signed in as <strong style={{ color: t.text }}>{username || "Helion"}</strong>
         </div>
-        <button
-          type="button"
-          onClick={() => {
-            logout();
-            window.location.assign("/login");
-          }}
-          style={{
-            background: "transparent",
-            border: `1px solid ${t.border}`,
-            borderRadius: 10,
-            padding: "8px 16px",
-            color: t.textSoft,
-            cursor: "pointer",
-            fontFamily: "inherit",
-            fontSize: 13,
-          }}
-        >
-          Sign out
-        </button>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          {user?.role === "admin" && (
+            <button
+              type="button"
+              onClick={() => window.location.assign("/admin/users")}
+              style={{
+                background: "transparent",
+                border: `1px solid ${t.border}`,
+                borderRadius: 10,
+                padding: "8px 16px",
+                color: t.textSoft,
+                cursor: "pointer",
+                fontFamily: "inherit",
+                fontSize: 13,
+              }}
+            >
+              Admin: Users
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => {
+              logout();
+              window.location.assign("/login");
+            }}
+            style={{
+              background: "transparent",
+              border: `1px solid ${t.border}`,
+              borderRadius: 10,
+              padding: "8px 16px",
+              color: t.textSoft,
+              cursor: "pointer",
+              fontFamily: "inherit",
+              fontSize: 13,
+            }}
+          >
+            Sign out
+          </button>
+        </div>
       </header>
 
       <div

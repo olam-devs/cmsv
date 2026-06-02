@@ -7,6 +7,7 @@ const path = require('path');
 const router = express.Router();
 const requireReportUser = require('./require-report-user');
 const { verifyLogin, signReportUser } = require('./auth');
+const users = require('./users-store');
 
 const MW = path.join(__dirname, '../../../middleware/src');
 const dailyLog = require(path.join(MW, 'services/daily-log.service'));
@@ -75,12 +76,13 @@ async function mapWithConcurrency(items, fn, concurrency = 6) {
 
 router.post('/auth/login', (req, res) => {
   const { username, password } = req.body || {};
-  if (!verifyLogin(username, password)) {
+  const v = verifyLogin(username, password);
+  if (!v?.ok) {
     return err(res, 'Invalid username or password', 401);
   }
   ok(res, {
-    token: signReportUser(),
-    user: { username: String(username).trim() },
+    token: signReportUser({ username: v.username, role: v.role }),
+    user: { username: v.username, role: v.role },
   });
 });
 
@@ -89,6 +91,34 @@ router.get('/auth/me', requireReportUser, (req, res) => {
 });
 
 router.use(requireReportUser);
+
+function requireAdmin(req, res, next) {
+  if (req.user?.role !== 'admin') return err(res, 'Admin only', 403);
+  return next();
+}
+
+router.get('/admin/users', requireAdmin, (req, res) => {
+  ok(res, users.listUsers());
+});
+
+router.post('/admin/users', requireAdmin, (req, res) => {
+  try {
+    const { username, password, role } = req.body || {};
+    const saved = users.upsertUser({ username, password, role });
+    ok(res, saved);
+  } catch (e) {
+    err(res, e.message, 400);
+  }
+});
+
+router.delete('/admin/users/:username', requireAdmin, (req, res) => {
+  const un = req.params.username;
+  if (!un) return err(res, 'username required', 400);
+  if (String(un).toLowerCase() === String(req.user?.username || '').toLowerCase()) {
+    return err(res, 'Cannot delete your own account', 400);
+  }
+  ok(res, { deleted: users.deleteUser(un) });
+});
 
 async function resolveDevIdno(id) {
   const s = String(id || '').trim();

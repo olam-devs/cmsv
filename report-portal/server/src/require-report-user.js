@@ -16,7 +16,7 @@ module.exports = function requireReportUser(req, res, next) {
     if (decoded.kind !== 'report') {
       return res.status(403).json({ success: false, message: 'Invalid token' });
     }
-    req.user = { username: decoded.username || 'Helion', role: 'report-admin' };
+    req.user = { username: decoded.username || 'Helion', role: decoded.role === 'admin' ? 'admin' : 'user' };
     next();
   } catch {
     res.status(401).json({ success: false, message: 'Invalid or expired token' });

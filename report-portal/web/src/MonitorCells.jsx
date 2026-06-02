@@ -58,11 +58,42 @@ export function FuelCell({ row }) {
 export function GprsCell({ row }) {
   const d = row.gprsDisplay;
   const loc = (d?.location || "—").slice(0, 48);
+  const lat = d?.lat ?? row.live?.lat ?? null;
+  const lng = d?.lng ?? row.live?.lng ?? null;
+  const canMap = lat != null && lng != null && Math.abs(Number(lat)) > 0.001;
+  const href = canMap
+    ? `https://www.google.com/maps?q=${encodeURIComponent(`${lat},${lng}`)}&z=17`
+    : null;
+
+  const moveLabel =
+    d?.moving === true ? "Driving" : d?.moving === false ? "Parked" : null;
   return (
     <MonitorCell
       display={d}
-      primary={loc}
-      title={d?.updatedAt ? `GPS ${d.updatedAt}${d?.ageLabel ? ` (${d.ageLabel} ago)` : ""}` : "No GPS"}
+      primary={
+        href ? (
+          <a
+            href={href}
+            target="_blank"
+            rel="noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            style={{ color: "inherit", textDecoration: "underline" }}
+            title="Open in Google Maps"
+          >
+            {loc}
+          </a>
+        ) : (
+          loc
+        )
+      }
+      secondary={moveLabel}
+      title={
+        href
+          ? `GPS ${d?.updatedAt || ""} — open in Google Maps`
+          : d?.updatedAt
+            ? `GPS ${d.updatedAt}`
+            : "No GPS"
+      }
     />
   );
 }
