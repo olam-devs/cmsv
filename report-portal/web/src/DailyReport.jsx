@@ -6,6 +6,7 @@ import { FuelCell, GprsCell, AntennaCell } from "./MonitorCells.jsx";
 import { cameraStatusFromRow, CamCellLabel } from "./CameraEditor.jsx";
 import VehicleEditDrawer from "./VehicleEditDrawer.jsx";
 import AnalyticsPanel from "./AnalyticsPanel.jsx";
+import { sortReportRows } from "./reportSort.js";
 
 const THRESHOLD_OPTIONS = [5, 10, 15, 20, 25, 30, 40, 50];
 const LIVE_REFRESH_MS = 10000;
@@ -101,7 +102,10 @@ export default function DailyReport({ username, user }) {
 
   const isToday = reportDate === today;
 
-  const report = useMemo(() => reportRaw, [reportRaw]);
+  const report = useMemo(() => {
+    if (!reportRaw) return null;
+    return { ...reportRaw, rows: sortReportRows(reportRaw.rows || []) };
+  }, [reportRaw]);
 
   const loadReport = useCallback(
     async (forceRefresh = false) => {
@@ -118,7 +122,9 @@ export default function DailyReport({ username, user }) {
           data = await apiFetch(`/daily-log/report?${q}`, { timeoutMs: 300000 });
         }
         if (gen !== loadGenRef.current) return;
-        setReportRaw(data);
+        setReportRaw(
+          data?.rows?.length ? { ...data, rows: sortReportRows(data.rows) } : data,
+        );
       } catch (e) {
         if (gen !== loadGenRef.current) return;
         setError(e.message);
@@ -144,13 +150,25 @@ export default function DailyReport({ username, user }) {
       if (tableMode === "quick") {
         const data = await apiFetch(`/daily-log/report/quick?${q}`, { timeoutMs: 45000 });
         if (data?.rows?.length) {
-          setReportRaw((prev) => (prev ? { ...prev, rows: data.rows, liveRefreshedAt: data.reportRefreshedAt } : prev));
+          setReportRaw((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  rows: sortReportRows(data.rows),
+                  liveRefreshedAt: data.reportRefreshedAt,
+                }
+              : prev,
+          );
           setLiveTick(data.reportRefreshedAt);
         }
       } else {
         const data = await apiFetch(`/daily-log/report/live-refresh?${q}`, { timeoutMs: 60000 });
         if (data?.rows?.length) {
-          setReportRaw((prev) => (prev ? { ...prev, rows: data.rows, liveRefreshedAt: data.refreshedAt } : prev));
+          setReportRaw((prev) =>
+            prev
+              ? { ...prev, rows: sortReportRows(data.rows), liveRefreshedAt: data.refreshedAt }
+              : prev,
+          );
           setLiveTick(data.refreshedAt);
         }
       }
@@ -231,12 +249,38 @@ export default function DailyReport({ username, user }) {
     setNewNote("");
     setCameraDraft(cameraStatusFromRow(row));
     try {
-      const [hist, manual] = await Promise.all([
+      const [hist, manual, meta] = await Promise.all([
         apiFetch(`/daily-log/vehicle/${encodeURIComponent(row.devIdno)}/history`),
         apiFetch(`/daily-log/vehicle/${encodeURIComponent(row.devIdno)}/manual-history`),
+        apiFetch(`/daily-log/vehicle/${encodeURIComponent(row.devIdno)}/meta`).catch(() => null),
       ]);
       setUpdateHistory(hist);
       setManualHistory(Array.isArray(manual) ? manual : []);
+      if (meta) {
+        setVehicleCommentDraft(meta.vehicleComment || "");
+        if (meta.simPhone) setSimPhoneDraft(meta.simPhone);
+        if (meta.bundlePurchasedDate) setBundleDraft(meta.bundlePurchasedDate);
+        if (meta.bundleDurationDays != null) {
+          setBundleDurationDraft(String(meta.bundleDurationDays));
+        }
+        setReportRaw((prev) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            rows: prev.rows.map((r) =>
+              r.devIdno === row.devIdno
+                ? {
+                    ...r,
+                    vehicleComment: meta.vehicleComment || null,
+                    sim: meta.simPhone || r.sim,
+                    bundlePurchasedDate: meta.bundlePurchasedDate ?? r.bundlePurchasedDate,
+                    bundleDurationDays: meta.bundleDurationDays ?? r.bundleDurationDays,
+                  }
+                : r,
+            ),
+          };
+        });
+      }
     } catch {
       setUpdateHistory(null);
       setManualHistory([]);
@@ -280,10 +324,21 @@ export default function DailyReport({ username, user }) {
         { method: "PATCH", body },
       );
       const row = res?.row || res;
+      const meta = res?.vehicleMeta;
+      const mergedRow = {
+        ...(row || {}),
+        vehicleComment:
+          meta?.vehicleComment ??
+          row?.vehicleComment ??
+          (vehicleCommentDraft.trim() || null),
+        sim: meta?.simPhone ?? row?.sim,
+      };
       setReportRaw((prev) => {
         if (!prev) return prev;
-        const rows = prev.rows.map((r) =>
-          r.devIdno === selectedDev ? { ...r, ...row, no: r.no } : r,
+        const rows = sortReportRows(
+          prev.rows.map((r) =>
+            r.devIdno === selectedDev ? { ...r, ...mergedRow, no: r.no } : r,
+          ),
         );
         return {
           ...prev,
@@ -297,6 +352,11 @@ export default function DailyReport({ username, user }) {
           ),
         };
       });
+      if (meta?.vehicleComment != null) {
+        setVehicleCommentDraft(meta.vehicleComment || "");
+      } else if (mergedRow.vehicleComment != null) {
+        setVehicleCommentDraft(mergedRow.vehicleComment || "");
+      }
       if (patch.notes != null) setNoteDraft(patch.notes);
       if (body.bundlePurchasedDate != null)
         setBundleDraft(body.bundlePurchasedDate || "");

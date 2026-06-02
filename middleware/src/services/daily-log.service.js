@@ -49,8 +49,21 @@ function load() {
   } catch (_) {}
 }
 
+/** Merge disk vehicleMeta into memory (multi-process: report portal + middleware share one file). */
+function refreshVehicleMetaFromDisk() {
+  try {
+    if (!fs.existsSync(FILE)) return;
+    const raw = JSON.parse(fs.readFileSync(FILE, 'utf8'));
+    const disk = raw.vehicleMeta || {};
+    for (const [id, dm] of Object.entries(disk)) {
+      store.vehicleMeta[id] = { ...dm, ...(store.vehicleMeta[id] || {}) };
+    }
+  } catch (_) {}
+}
+
 function save() {
   try {
+    refreshVehicleMetaFromDisk();
     const dir = path.dirname(FILE);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     const tmp = FILE + '.tmp';
@@ -284,6 +297,7 @@ function saveManualInspection(devIdno, reportDate, patch = {}, createdBy = null)
     parts.push(`bundle=${meta.bundlePurchasedDate || '—'} / ${meta.bundleDurationDays || '?'}d`);
   }
   if (patch.simPhone !== undefined) parts.push('sim updated');
+  if (patch.vehicleComment !== undefined) parts.push('tag updated');
 
   if (parts.length) {
     pushSyncLog({
@@ -311,6 +325,7 @@ function saveManualInspection(devIdno, reportDate, patch = {}, createdBy = null)
 }
 
 function enrichRowFromMeta(row, devIdno, reportDate) {
+  refreshVehicleMetaFromDisk();
   const meta = getVehicleMeta(devIdno) || {};
   const manual = getManualInspection(devIdno, reportDate);
   attachBundleFields(row, meta);
@@ -971,4 +986,5 @@ module.exports = {
   bulkAssignBundles,
   normPlateKey,
   sortDailyReportRows,
+  refreshVehicleMetaFromDisk,
 };

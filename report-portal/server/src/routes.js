@@ -237,6 +237,7 @@ router.get('/daily-log/report', async (req, res) => {
 
 // Fast table mode: live snapshot only (single CMS call, no per-vehicle track history).
 router.get('/daily-log/report/quick', async (req, res) => {
+  dailyLog.refreshVehicleMetaFromDisk();
   const date = (req.query.date || dailyLog.todayStr()).slice(0, 10);
   const vehicles = await loadVehicles(res);
   if (vehicles == null) return;
@@ -297,6 +298,12 @@ router.get('/daily-log/report/export', async (req, res) => {
 router.get('/daily-log/vehicle/:id/history', async (req, res) => {
   const devIdno = await resolveDevIdno(req.params.id);
   ok(res, dailyLog.getVehicleUpdateHistory(devIdno, { limit: req.query.limit }));
+});
+
+router.get('/daily-log/vehicle/:id/meta', async (req, res) => {
+  dailyLog.refreshVehicleMetaFromDisk();
+  const devIdno = await resolveDevIdno(req.params.id);
+  ok(res, dailyLog.getVehicleMeta(devIdno) || { devIdno });
 });
 
 router.patch('/daily-log/report/:id', async (req, res) => {
