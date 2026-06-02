@@ -8,7 +8,7 @@ import VehicleEditDrawer from "./VehicleEditDrawer.jsx";
 import AnalyticsPanel from "./AnalyticsPanel.jsx";
 
 const THRESHOLD_OPTIONS = [5, 10, 15, 20, 25, 30, 40, 50];
-const LIVE_REFRESH_MS = 30000;
+const LIVE_REFRESH_MS = 10000;
 const fuelTodayIso = () => new Date().toISOString().slice(0, 10);
 const dtLocalNowMinus = (mins) => {
   const d = new Date(Date.now() - mins * 60000);
@@ -58,6 +58,9 @@ export default function DailyReport({ username, user }) {
   const [cameraDraft, setCameraDraft] = useState({ mode: "unchecked", badChannels: [] });
   const [analyticsBeginTs, setAnalyticsBeginTs] = useState(() => dtLocalNowMinus(6 * 60));
   const [analyticsEndTs, setAnalyticsEndTs] = useState(() => dtLocalNowMinus(0));
+  const [tableMode, setTableMode] = useState("quick"); // quick | full
+  const [tableFull, setTableFull] = useState(false);
+  const [statusFilter, setStatusFilter] = useState("all"); // all|online|offline|issues|driving|parked
 
   useEffect(() => {
     apiFetch("/vehicles")
@@ -97,12 +100,14 @@ export default function DailyReport({ username, user }) {
       setLoading(true);
       setError(null);
       try {
-        const q = new URLSearchParams({
-          date: reportDate,
-          dropThresholdL: String(dropThreshold),
-        });
-        if (forceRefresh) q.set("refresh", "1");
-        const data = await apiFetch(`/daily-log/report?${q}`, { timeoutMs: 300000 });
+        const q = new URLSearchParams({ date: reportDate, dropThresholdL: String(dropThreshold) });
+        let data;
+        if (tableMode === "quick" && !forceRefresh) {
+          data = await apiFetch(`/daily-log/report/quick?${q}`, { timeoutMs: 45000 });
+        } else {
+          if (forceRefresh) q.set("refresh", "1");
+          data = await apiFetch(`/daily-log/report?${q}`, { timeoutMs: 300000 });
+        }
         if (gen !== loadGenRef.current) return;
         setReportRaw(data);
       } catch (e) {
@@ -112,12 +117,12 @@ export default function DailyReport({ username, user }) {
         if (gen === loadGenRef.current) setLoading(false);
       }
     },
-    [reportDate, dropThreshold],
+    [reportDate, dropThreshold, tableMode],
   );
 
   useEffect(() => {
     loadReport(false);
-  }, [reportDate, dropThreshold, loadReport]);
+  }, [reportDate, dropThreshold, tableMode, loadReport]);
 
   const loadLiveRefresh = useCallback(async () => {
     if (!reportRaw?.rows?.length || loading) return;
@@ -126,15 +131,23 @@ export default function DailyReport({ username, user }) {
         date: reportDate,
         dropThresholdL: String(dropThreshold),
       });
-      const data = await apiFetch(`/daily-log/report/live-refresh?${q}`, { timeoutMs: 60000 });
-      if (data?.rows?.length) {
-        setReportRaw((prev) => (prev ? { ...prev, rows: data.rows, liveRefreshedAt: data.refreshedAt } : prev));
-        setLiveTick(data.refreshedAt);
+      if (tableMode === "quick") {
+        const data = await apiFetch(`/daily-log/report/quick?${q}`, { timeoutMs: 45000 });
+        if (data?.rows?.length) {
+          setReportRaw((prev) => (prev ? { ...prev, rows: data.rows, liveRefreshedAt: data.reportRefreshedAt } : prev));
+          setLiveTick(data.reportRefreshedAt);
+        }
+      } else {
+        const data = await apiFetch(`/daily-log/report/live-refresh?${q}`, { timeoutMs: 60000 });
+        if (data?.rows?.length) {
+          setReportRaw((prev) => (prev ? { ...prev, rows: data.rows, liveRefreshedAt: data.refreshedAt } : prev));
+          setLiveTick(data.refreshedAt);
+        }
       }
     } catch {
       /* keep last rows */
     }
-  }, [reportDate, dropThreshold, reportRaw?.rows?.length, loading]);
+  }, [reportDate, dropThreshold, reportRaw?.rows?.length, loading, tableMode]);
 
   useEffect(() => {
     if (!autoRefresh || !isToday || !reportRaw?.rows?.length) return undefined;
@@ -310,10 +323,32 @@ export default function DailyReport({ username, user }) {
   };
 
   const filteredRows = report?.rows || [];
+  const visibleRows = useMemo(() => {
+    const rows = filteredRows;
+    if (statusFilter === "all") return rows;
+    if (statusFilter === "online") return rows.filter((r) => r.helionStatus === "connected");
+    if (statusFilter === "offline") return rows.filter((r) => r.helionStatus !== "connected");
+    if (statusFilter === "issues") return rows.filter((r) => r.hasIssues);
+    if (statusFilter === "driving") return rows.filter((r) => r.gprsDisplay?.moving === true);
+    if (statusFilter === "parked") return rows.filter((r) => r.gprsDisplay?.moving === false);
+    return rows;
+  }, [filteredRows, statusFilter]);
   const topIssues = (report?.issues || []).slice(0, 12);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      {tableFull && (
+        <div
+          role="presentation"
+          onClick={() => setTableFull(false)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(15, 23, 42, 0.45)",
+            zIndex: 600,
+          }}
+        />
+      )}
       <header
         style={{
           display: "flex",
@@ -406,8 +441,39 @@ export default function DailyReport({ username, user }) {
               label: `${n} L`,
             }))}
           />
-          <Btn onClick={() => loadReport(true)} disabled={loading}>
-            {loading ? "Loading CMS (up to 2 min)…" : "Refresh from CMS"}
+          <Sel
+            label="Table mode"
+            value={tableMode}
+            onChange={(e) => setTableMode(e.target.value)}
+            options={[
+              { value: "quick", label: "Quick (live snapshot)" },
+              { value: "full", label: "Full day (slow)" },
+            ]}
+          />
+          <Btn
+            onClick={() => {
+              setTableMode("full");
+              loadReport(true);
+            }}
+            disabled={loading}
+          >
+            {loading ? "Loading CMS (can take long)…" : "Refresh full day from CMS"}
+          </Btn>
+          <Sel
+            label="Filter"
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+            options={[
+              { value: "all", label: "All" },
+              { value: "online", label: "Online" },
+              { value: "offline", label: "Offline" },
+              { value: "issues", label: "With issues" },
+              { value: "driving", label: "Driving" },
+              { value: "parked", label: "Parked" },
+            ]}
+          />
+          <Btn onClick={() => setTableFull((v) => !v)} disabled={!report?.rows?.length}>
+            {tableFull ? "Exit full screen" : "Full screen table"}
           </Btn>
           <label
             style={{
@@ -426,7 +492,7 @@ export default function DailyReport({ username, user }) {
               disabled={!isToday}
               onChange={(e) => setAutoRefresh(e.target.checked)}
             />
-            Live update every 30s
+            Live update every 10s
           </label>
           {liveTick && (
             <Badge color={t.textSoft}>Live {fmtTs(liveTick)}</Badge>
@@ -513,11 +579,28 @@ export default function DailyReport({ username, user }) {
         title={`Fleet table — CMS day ${reportDate}`}
         subtitle="Click a row to edit cameras & notes. Table scrolls independently — close edit panel with ×."
       >
+        <div
+          style={
+            tableFull
+              ? {
+                  position: "fixed",
+                  inset: 16,
+                  zIndex: 601,
+                  background: t.panel,
+                  borderRadius: 14,
+                  padding: 12,
+                  boxShadow: "0 18px 60px rgba(0,0,0,0.35)",
+                  display: "flex",
+                  flexDirection: "column",
+                }
+              : {}
+          }
+        >
           {loading && !report ? (
             <Spinner label="Building report from CMSV — can take 1–2 minutes…" />
-          ) : !filteredRows.length && !loading && !reportRaw ? (
+          ) : !visibleRows.length && !loading && !reportRaw ? (
             <Empty message="No data yet. Click Refresh from CMS." />
-          ) : filteredRows.length === 0 && reportRaw ? (
+          ) : visibleRows.length === 0 && reportRaw ? (
             <Empty
               message={
                 search.trim()
@@ -530,12 +613,14 @@ export default function DailyReport({ username, user }) {
           ) : (
             <div
               style={{
-                maxHeight: "calc(100vh - 300px)",
+                maxHeight: tableFull ? "none" : "calc(100vh - 300px)",
                 overflow: "auto",
                 scrollBehavior: "smooth",
                 border: `1px solid ${t.border}`,
                 borderRadius: 10,
                 opacity: loading ? 0.65 : 1,
+                flex: tableFull ? 1 : undefined,
+                minHeight: tableFull ? 0 : undefined,
               }}
             >
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
@@ -571,7 +656,7 @@ export default function DailyReport({ username, user }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredRows.map((row, idx) => {
+                  {visibleRows.map((row, idx) => {
                     const active = row.devIdno === selectedDev;
                     const rowBg = row.hasIssues
                       ? idx % 2 === 0
@@ -635,6 +720,7 @@ export default function DailyReport({ username, user }) {
               </table>
             </div>
           )}
+        </div>
         </Panel>
 
       <VehicleEditDrawer

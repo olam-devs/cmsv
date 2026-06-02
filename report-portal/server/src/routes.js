@@ -13,6 +13,7 @@ const MW = path.join(__dirname, '../../../middleware/src');
 const dailyLog = require(path.join(MW, 'services/daily-log.service'));
 const cms = require(path.join(MW, 'services/cmsv6.service'));
 const { normalizeFuelPoints, detectFuelEvents } = require(path.join(MW, 'utils/fuel-analyze'));
+const { enrichMonitorFields } = require(path.join(MW, 'utils/report-monitor-fields'));
 const { loadFleetVehicles } = require('./vehicles');
 
 const ok = (res, data, meta = {}) => res.json({ success: true, ...meta, data });
@@ -178,6 +179,77 @@ router.get('/daily-log/report', async (req, res) => {
     forceRefresh,
   });
   ok(res, report, { period });
+});
+
+// Fast table mode: live snapshot only (single CMS call, no per-vehicle track history).
+router.get('/daily-log/report/quick', async (req, res) => {
+  const date = (req.query.date || dailyLog.todayStr()).slice(0, 10);
+  const vehicles = await loadVehicles(res);
+  if (vehicles == null) return;
+  const statuses = await cms.getAllGPS().catch(() => []);
+  const map = new Map();
+  for (const s of statuses) {
+    const id = String(s.devIdno || s.id || '');
+    if (id) map.set(id, s);
+  }
+  const rows = vehicles.map((v, i) => {
+    const devIdno = v.devIdno || v.id;
+    const live = map.get(String(devIdno)) || null;
+    const online = live ? (live.ol ?? live.online ?? 0) !== 0 : false;
+    const row = {
+      no: i + 1,
+      devIdno,
+      plate: v.plate || v.nm || devIdno,
+      nm: v.nm,
+      reportDate: date,
+      live: live
+        ? {
+            online,
+            speed: live.speed,
+            fuel: live.fuel,
+            gpsTime: live.gpsTime,
+            accOn: live.accOn,
+            lat: live.lat,
+            lng: live.lng,
+            ps: live.ps != null ? String(live.ps) : null,
+          }
+        : null,
+      helionStatus: online ? 'connected' : 'offline',
+      helionLabel: online ? 'Connected' : 'Offline',
+      hasIssues: false,
+      issues: [],
+      notes: dailyLog.getManualInspection(devIdno, date)?.notes || '',
+      bundlePurchasedDate: dailyLog.getVehicleMeta(devIdno)?.bundlePurchasedDate || null,
+      camerasOk: dailyLog.getManualInspection(devIdno, date)?.camerasOk ?? null,
+      cameraStatus: dailyLog.getManualInspection(devIdno, date)?.cameraStatus ?? null,
+      badChannels: dailyLog.getManualInspection(devIdno, date)?.badChannels ?? [],
+      gprsLocation: null,
+      connectivity: { lastGpsAt: live?.gpsTime || null, offlineSpells: [] },
+      offlineDurationSecs: 0,
+    };
+    enrichMonitorFields(row);
+    // gprsDisplay already includes parked/driving + coords from live
+    row.hasIssues = row.fuelDisplay?.status === 'error' || row.gprsDisplay?.status === 'error' || row.antennaDisplay?.status === 'error';
+    if (row.hasIssues) row.issues.push({ code: 'monitor', message: 'Monitoring issue', severity: 'low' });
+    return row;
+  });
+  ok(
+    res,
+    {
+      reportDate: date,
+      reportRefreshedAt: new Date().toISOString(),
+      title: 'HELION TRACKING — DAILY FLEET MONITORING REPORT',
+      rows,
+      summary: {
+        total: rows.length,
+        withIssues: rows.filter((r) => r.hasIssues).length,
+        offline: rows.filter((r) => r.helionStatus !== 'connected').length,
+      },
+      cached: false,
+      quick: true,
+    },
+    { period: { from: date, to: date, label: date, singleDay: true } },
+  );
 });
 
 router.get('/daily-log/report/export', async (req, res) => {
