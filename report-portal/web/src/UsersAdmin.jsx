@@ -195,6 +195,23 @@ export default function UsersAdmin({ user }) {
           <Btn onClick={() => setBulkPhones(HELION_SIM_IMPORT_LINES)} style={{ background: t.bg, color: t.text }}>
             Load Helion list (47)
           </Btn>
+          <Btn
+            onClick={async () => {
+              setErr("");
+              try {
+                const res = await apiFetch("/admin/seed-sims", {
+                  method: "POST",
+                  body: { force: true },
+                });
+                setBulkResult(res);
+              } catch (e) {
+                setErr(e.message || String(e));
+              }
+            }}
+            style={{ background: t.bg, color: t.text }}
+          >
+            Apply all SIM defaults now
+          </Btn>
         </div>
         {bulkResult?.updated != null && (
           <div style={{ marginTop: 8, fontSize: 12, color: t.textSoft }}>

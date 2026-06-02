@@ -190,6 +190,7 @@ function ensureVehicleMeta(devIdno, plate = '') {
       bundlePurchasedDate: null,
       bundleDurationDays: null,
       simPhone: null,
+      vehicleComment: null,
       lastCmsSyncAt: null,
       lastManualEditAt: null,
       lastGpsUploadAt: null,
@@ -234,6 +235,10 @@ function saveManualInspection(devIdno, reportDate, patch = {}, createdBy = null)
   if (patch.simPhone !== undefined) {
     const p = String(patch.simPhone || '').trim();
     meta.simPhone = p || null;
+  }
+  if (patch.vehicleComment !== undefined) {
+    const c = String(patch.vehicleComment || '').trim();
+    meta.vehicleComment = c || null;
   }
 
   let cameraStatus = prev.cameraStatus
@@ -309,6 +314,7 @@ function enrichRowFromMeta(row, devIdno, reportDate) {
   const meta = getVehicleMeta(devIdno) || {};
   const manual = getManualInspection(devIdno, reportDate);
   attachBundleFields(row, meta);
+  row.vehicleComment = meta.vehicleComment || null;
   row.notes = manual.notes != null ? manual.notes : row.notes || '';
   row.camerasEditedBy = manual.lastCameraEditedBy || null;
   row.camerasEditedAt = manual.lastCameraEditedAt || null;
@@ -367,7 +373,8 @@ function normPlateKey(s) {
     .toLowerCase();
 }
 
-function bulkUpdateSimPhones(updates = []) {
+function bulkUpdateSimPhones(updates = [], opts = {}) {
+  const onlyIfEmpty = opts.onlyIfEmpty === true;
   let count = 0;
   const skipped = [];
   for (const u of updates) {
@@ -388,6 +395,7 @@ function bulkUpdateSimPhones(updates = []) {
       continue;
     }
     const meta = ensureVehicleMeta(id, plate || undefined);
+    if (onlyIfEmpty && meta.simPhone) continue;
     meta.simPhone = phone;
     if (plate) meta.plate = plate.replace(/\s*\([^)]*\)\s*/g, ' ').replace(/\s+/g, ' ').trim();
     count += 1;
@@ -962,4 +970,5 @@ module.exports = {
   bulkUpdateSimPhones,
   bulkAssignBundles,
   normPlateKey,
+  sortDailyReportRows,
 };

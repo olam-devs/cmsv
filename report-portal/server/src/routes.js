@@ -3,6 +3,7 @@
  */
 const express = require('express');
 const path = require('path');
+const fs = require('fs');
 
 const router = express.Router();
 const requireReportUser = require('./require-report-user');
@@ -147,6 +148,18 @@ router.post('/admin/bulk-phones', requireAdmin, async (req, res) => {
   ok(res, dailyLog.bulkUpdateSimPhones(resolved));
 });
 
+router.post('/admin/seed-sims', requireAdmin, (req, res) => {
+  try {
+    const fp = path.join(__dirname, '../../data/helion-sim-defaults.json');
+    if (!fs.existsSync(fp)) return err(res, 'helion-sim-defaults.json not found', 404);
+    const list = JSON.parse(fs.readFileSync(fp, 'utf8'));
+    const force = req.body?.force === true;
+    ok(res, dailyLog.bulkUpdateSimPhones(list, { onlyIfEmpty: !force }));
+  } catch (e) {
+    err(res, e.message, 500);
+  }
+});
+
 /** Bulk bundle: body { devIdnos, bundlePurchasedDate?, bundleDurationDays } */
 router.post('/daily-log/bulk-bundle', async (req, res) => {
   const { devIdnos, bundlePurchasedDate, bundleDurationDays } = req.body || {};
@@ -233,13 +246,14 @@ router.get('/daily-log/report/quick', async (req, res) => {
     const id = String(s.devIdno || s.id || '');
     if (id) map.set(id, s);
   }
-  const rows = vehicles.map((v, i) => {
-    const row = dailyLog.buildQuickRowForVehicle(v, date, map);
-    row.no = i + 1;
-    row.nm = v.nm;
-    if (row.hasIssues) row.issues.push({ code: 'monitor', message: 'Monitoring issue', severity: 'low' });
-    return row;
-  });
+  const rows = dailyLog.sortDailyReportRows(
+    vehicles.map((v) => {
+      const row = dailyLog.buildQuickRowForVehicle(v, date, map);
+      row.nm = v.nm;
+      if (row.hasIssues) row.issues.push({ code: 'monitor', message: 'Monitoring issue', severity: 'low' });
+      return row;
+    }),
+  );
   ok(
     res,
     {
@@ -296,6 +310,7 @@ router.patch('/daily-log/report/:id', async (req, res) => {
     bundlePurchasedDate,
     bundleDurationDays,
     simPhone,
+    vehicleComment,
   } = req.body || {};
   let vehicles;
   try {
@@ -315,6 +330,7 @@ router.patch('/daily-log/report/:id', async (req, res) => {
       bundlePurchasedDate,
       bundleDurationDays,
       simPhone,
+      vehicleComment,
       plate: v.plate || v.nm,
     },
     req.user?.username || null,
@@ -517,4 +533,21 @@ router.get('/daily-log/report/:id/live', async (req, res) => {
   ok(res, { row, truck: truck || null });
 });
 
+function seedHelionSimDefaults() {
+  try {
+    const fp = path.join(__dirname, '../../data/helion-sim-defaults.json');
+    if (!fs.existsSync(fp)) return;
+    const list = JSON.parse(fs.readFileSync(fp, 'utf8'));
+    const result = dailyLog.bulkUpdateSimPhones(list, { onlyIfEmpty: true });
+    if (result.updated) {
+      // eslint-disable-next-line no-console
+      console.log(`Helion SIM defaults: ${result.updated} vehicle(s) updated`);
+    }
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.warn('Helion SIM seed skipped:', e.message);
+  }
+}
+
 module.exports = router;
+module.exports.seedHelionSimDefaults = seedHelionSimDefaults;

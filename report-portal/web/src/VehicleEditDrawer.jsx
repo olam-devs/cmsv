@@ -10,6 +10,8 @@ export default function VehicleEditDrawer({
   setBundleDurationDraft,
   simPhoneDraft,
   setSimPhoneDraft,
+  vehicleCommentDraft,
+  setVehicleCommentDraft,
   cameraDraft,
   setCameraDraft,
   noteDraft,
@@ -107,8 +109,18 @@ export default function VehicleEditDrawer({
             label="SIM / phone number"
             value={simPhoneDraft}
             onChange={(e) => setSimPhoneDraft(e.target.value)}
-            placeholder="e.g. 08012345678"
+            placeholder="e.g. 255300020357668"
           />
+
+          <Inp
+            label="Plate highlight (short tag)"
+            value={vehicleCommentDraft}
+            onChange={(e) => setVehicleCommentDraft(e.target.value)}
+            placeholder="e.g. excavator, mtwara, Canter…"
+          />
+          <div style={{ fontSize: 10, color: t.textSoft, marginTop: -4, marginBottom: 8 }}>
+            Shown as a yellow badge under the plate in the fleet table.
+          </div>
 
           <div style={{ marginTop: 12 }}>
             <Inp

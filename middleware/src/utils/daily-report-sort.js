@@ -1,40 +1,64 @@
 /**
- * Daily fleet report row order (Helion Excel-style):
- * 1. Main fleet — plate A→Z (numeric-aware, keeps similar plates together)
- * 2. T406 / T407 / T162 / T245 — above device-id plates
- * 3. Plates starting 0134000 — bottom
+ * Daily fleet report row order (Helion):
+ * 1. Main fleet — plate A→Z
+ * 2. Special group (bottom-up): T972, T162, T407, T406, T245
+ * 3. Device-id plates (0134000…) — very bottom
  */
 
 function normPlate(plate) {
   return String(plate || '')
     .trim()
-    .toUpperCase();
+    .toUpperCase()
+    .replace(/\s+/g, '');
 }
 
-/** @returns {1|2|3} */
-function plateSortTier(plate) {
+function isDeviceIdRow(plate, devIdno) {
+  const d = String(devIdno || '');
   const p = normPlate(plate);
-  if (p.startsWith('0134000')) return 3;
-  if (/T406|T407|T162|T245/.test(p)) return 2;
-  return 1;
+  return d.startsWith('0134000') || p.startsWith('0134000');
 }
 
-function comparePlates(plateA, plateB) {
-  const tierA = plateSortTier(plateA);
-  const tierB = plateSortTier(plateB);
-  if (tierA !== tierB) return tierA - tierB;
-  return normPlate(plateA).localeCompare(normPlate(plateB), 'en', {
+/** Closer to table bottom = lower sub index within tier 2. */
+const SPECIAL_BOTTOM_ORDER = [
+  (p) => /T245/.test(p),
+  (p) => /T406/.test(p),
+  (p) => /T407/.test(p),
+  (p) => /T162/.test(p),
+  (p) => /T972/.test(p),
+];
+
+function rowSortKey(plate, devIdno) {
+  const p = normPlate(plate);
+  if (isDeviceIdRow(plate, devIdno)) {
+    return { tier: 3, sub: p || String(devIdno) };
+  }
+  for (let i = 0; i < SPECIAL_BOTTOM_ORDER.length; i++) {
+    if (SPECIAL_BOTTOM_ORDER[i](p)) return { tier: 2, sub: i };
+  }
+  return { tier: 1, sub: p };
+}
+
+function compareRowKeys(a, b) {
+  if (a.tier !== b.tier) return a.tier - b.tier;
+  if (a.tier === 2) return b.sub - a.sub;
+  return String(a.sub).localeCompare(String(b.sub), 'en', {
     numeric: true,
     sensitivity: 'base',
   });
 }
 
-/** Sort report rows and re-number NO column. */
+function comparePlates(plateA, plateB, devA, devB) {
+  return compareRowKeys(
+    rowSortKey(plateA, devA),
+    rowSortKey(plateB, devB),
+  );
+}
+
 function sortDailyReportRows(rows) {
   const sorted = [...(rows || [])].sort((a, b) => {
     const plateA = a.plate || a.nm || a.devIdno || '';
     const plateB = b.plate || b.nm || b.devIdno || '';
-    return comparePlates(plateA, plateB);
+    return comparePlates(plateA, plateB, a.devIdno, b.devIdno);
   });
   sorted.forEach((row, i) => {
     row.no = i + 1;
@@ -42,4 +66,4 @@ function sortDailyReportRows(rows) {
   return sorted;
 }
 
-module.exports = { sortDailyReportRows, plateSortTier, comparePlates };
+module.exports = { sortDailyReportRows, comparePlates, rowSortKey };

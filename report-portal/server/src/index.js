@@ -88,4 +88,7 @@ app.listen(PORT, () => {
   console.log(`Helion Report Portal listening on http://127.0.0.1:${PORT}`);
   // eslint-disable-next-line no-console
   console.log(`CMS: ${process.env.CMSV6_BASE_URL} user=${process.env.CMSV6_USERNAME}`);
+  if (typeof routes.seedHelionSimDefaults === 'function') {
+    routes.seedHelionSimDefaults();
+  }
 });

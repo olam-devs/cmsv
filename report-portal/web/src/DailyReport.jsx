@@ -89,6 +89,9 @@ export default function DailyReport({ username, user }) {
   const [bulkBundleStart, setBulkBundleStart] = useState(today);
   const [bulkBundleDays, setBulkBundleDays] = useState("30");
   const [bulkApplying, setBulkApplying] = useState(false);
+  const [vehicleCommentDraft, setVehicleCommentDraft] = useState("");
+  const [syncCountdown, setSyncCountdown] = useState(LIVE_REFRESH_MS / 1000);
+  const [liveSyncing, setLiveSyncing] = useState(false);
 
   useEffect(() => {
     apiFetch("/vehicles")
@@ -132,6 +135,7 @@ export default function DailyReport({ username, user }) {
 
   const loadLiveRefresh = useCallback(async () => {
     if (!reportRaw?.rows?.length || loading) return;
+    setLiveSyncing(true);
     try {
       const q = new URLSearchParams({
         date: reportDate,
@@ -152,13 +156,23 @@ export default function DailyReport({ username, user }) {
       }
     } catch {
       /* keep last rows */
+    } finally {
+      setLiveSyncing(false);
+      setSyncCountdown(LIVE_REFRESH_MS / 1000);
     }
   }, [reportDate, dropThreshold, reportRaw?.rows?.length, loading, tableMode]);
 
   useEffect(() => {
     if (!autoRefresh || !isToday || !reportRaw?.rows?.length) return undefined;
-    const id = setInterval(loadLiveRefresh, LIVE_REFRESH_MS);
-    return () => clearInterval(id);
+    setSyncCountdown(LIVE_REFRESH_MS / 1000);
+    const tickId = setInterval(() => {
+      setSyncCountdown((n) => (n <= 1 ? LIVE_REFRESH_MS / 1000 : n - 1));
+    }, 1000);
+    const refreshId = setInterval(loadLiveRefresh, LIVE_REFRESH_MS);
+    return () => {
+      clearInterval(tickId);
+      clearInterval(refreshId);
+    };
   }, [autoRefresh, isToday, reportRaw?.rows?.length, loadLiveRefresh]);
 
   useEffect(() => {
@@ -213,6 +227,7 @@ export default function DailyReport({ username, user }) {
         : "",
     );
     setSimPhoneDraft(row.sim || "");
+    setVehicleCommentDraft(row.vehicleComment || "");
     setNewNote("");
     setCameraDraft(cameraStatusFromRow(row));
     try {
@@ -254,6 +269,10 @@ export default function DailyReport({ username, user }) {
         bundleDurationDays: dur === "" || dur == null ? null : parseInt(dur, 10),
         simPhone:
           patch.simPhone !== undefined ? patch.simPhone : simPhoneDraft.trim() || null,
+        vehicleComment:
+          patch.vehicleComment !== undefined
+            ? patch.vehicleComment
+            : vehicleCommentDraft.trim() || null,
         rowNo: report?.rows?.find((r) => r.devIdno === selectedDev)?.no,
       };
       const res = await apiFetch(
@@ -438,6 +457,27 @@ export default function DailyReport({ username, user }) {
         zIndex: 4,
       }}
     >
+      {autoRefresh && isToday && report?.rows?.length > 0 && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            fontSize: 12,
+            fontWeight: 700,
+            color: liveSyncing ? t.accent : t.textSoft,
+            padding: "6px 10px",
+            borderRadius: 8,
+            background: liveSyncing ? t.accentSoft : t.bg,
+            border: `1px solid ${t.border}`,
+          }}
+        >
+          <span className={liveSyncing ? "helion-sync-spin" : undefined} aria-hidden>
+            ⟳
+          </span>
+          {liveSyncing ? "Syncing live data…" : `Live sync in ${syncCountdown}s`}
+        </div>
+      )}
       <Inp
         label="Search plate / device / SIM"
         value={search}
@@ -761,13 +801,10 @@ export default function DailyReport({ username, user }) {
                       "DEVICE",
                       "SIM",
                       "BUNDLE",
-                      "LAST SYNC",
-                      "LAST GPS",
                       "CAM",
                       "FUEL",
                       "GPRS",
                       "ANTENNA",
-                      "HELION",
                       "NOTES",
                     ].map((h) => (
                       <th
@@ -819,9 +856,30 @@ export default function DailyReport({ username, user }) {
                           />
                         </td>
                         <td style={{ padding: 8 }}>{row.no ?? idx + 1}</td>
-                        <td style={{ padding: 8, fontWeight: 600 }}>{row.plate}</td>
-                        <td style={{ padding: 8 }}>{row.devIdno}</td>
-                        <td style={{ padding: 8, fontSize: 11 }}>{row.sim || "—"}</td>
+                        <td style={{ padding: 8, fontWeight: 600, minWidth: 120 }}>
+                          <div>{row.plate}</div>
+                          {row.vehicleComment ? (
+                            <span
+                              style={{
+                                display: "inline-block",
+                                marginTop: 4,
+                                padding: "2px 7px",
+                                borderRadius: 6,
+                                fontSize: 10,
+                                fontWeight: 700,
+                                background: "#fef3c7",
+                                color: "#92400e",
+                                border: "1px solid #fcd34d",
+                              }}
+                            >
+                              {row.vehicleComment}
+                            </span>
+                          ) : null}
+                        </td>
+                        <td style={{ padding: 8, fontSize: 11 }}>{row.devIdno}</td>
+                        <td style={{ padding: 8, fontSize: 11, fontFamily: "monospace" }}>
+                          {row.sim || "—"}
+                        </td>
                         <td
                           style={{
                             padding: 8,
@@ -850,12 +908,6 @@ export default function DailyReport({ username, user }) {
                             "—"
                           )}
                         </td>
-                        <td style={{ padding: 8, fontSize: 10, color: t.textSoft }}>
-                          {fmtTs(row.cmsDataSyncedAt)}
-                        </td>
-                        <td style={{ padding: 8, fontSize: 10, color: t.textSoft }}>
-                          {row.lastGpsUploadAt ? fmtTs(row.lastGpsUploadAt) : "—"}
-                        </td>
                         <td style={{ padding: 8 }}>
                           <CamCellLabel row={row} t={t} />
                         </td>
@@ -868,7 +920,6 @@ export default function DailyReport({ username, user }) {
                         <td style={{ padding: 8 }}>
                           <AntennaCell row={row} />
                         </td>
-                        <td style={{ padding: 8, fontSize: 11 }}>{row.helionLabel}</td>
                         <td
                           style={{
                             padding: 8,
@@ -947,6 +998,8 @@ export default function DailyReport({ username, user }) {
         setBundleDurationDraft={setBundleDurationDraft}
         simPhoneDraft={simPhoneDraft}
         setSimPhoneDraft={setSimPhoneDraft}
+        vehicleCommentDraft={vehicleCommentDraft}
+        setVehicleCommentDraft={setVehicleCommentDraft}
         cameraDraft={cameraDraft}
         setCameraDraft={setCameraDraft}
         noteDraft={noteDraft}
@@ -962,6 +1015,7 @@ export default function DailyReport({ username, user }) {
             bundlePurchasedDate: bundleDraft || null,
             bundleDurationDays: bundleDurationDraft,
             simPhone: simPhoneDraft.trim() || null,
+            vehicleComment: vehicleCommentDraft.trim() || null,
           })
         }
         onAddNote={addManualNote}
