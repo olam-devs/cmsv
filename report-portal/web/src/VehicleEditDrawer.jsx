@@ -177,6 +177,9 @@ export default function VehicleEditDrawer({
                 >
                   <div style={{ fontWeight: 700 }}>
                     {ent.fields?.type || "note"} · {fmtDay(ent.reportDate)} · {fmtTs(ent.recordedAt)}
+                    {ent.createdBy ? (
+                      <span style={{ color: t.textSoft, fontWeight: 600 }}> · by {ent.createdBy}</span>
+                    ) : null}
                   </div>
                   <div style={{ marginTop: 4 }}>{ent.manualNote || "—"}</div>
                 </div>
