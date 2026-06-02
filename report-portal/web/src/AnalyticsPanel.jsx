@@ -67,6 +67,10 @@ export default function AnalyticsPanel({
   view,
   onViewChange,
   periodLabel,
+  beginTs,
+  setBeginTs,
+  endTs,
+  setEndTs,
   fuelDropMinL,
   setFuelDropMinL,
   customFuelMin,
@@ -85,6 +89,20 @@ export default function AnalyticsPanel({
 
   const controls = (
     <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "flex-end" }}>
+      <Inp
+        label="From (date/time)"
+        type="datetime-local"
+        value={beginTs}
+        onChange={(e) => setBeginTs(e.target.value)}
+        style={{ width: 210 }}
+      />
+      <Inp
+        label="To (date/time)"
+        type="datetime-local"
+        value={endTs}
+        onChange={(e) => setEndTs(e.target.value)}
+        style={{ width: 210 }}
+      />
       <Sel
         label="Min fuel drop (L)"
         value={String(fuelDropMinL)}

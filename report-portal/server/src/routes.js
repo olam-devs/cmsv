@@ -11,6 +11,7 @@ const { verifyLogin, signReportUser } = require('./auth');
 const MW = path.join(__dirname, '../../../middleware/src');
 const dailyLog = require(path.join(MW, 'services/daily-log.service'));
 const cms = require(path.join(MW, 'services/cmsv6.service'));
+const { normalizeFuelPoints, detectFuelEvents } = require(path.join(MW, 'utils/fuel-analyze'));
 const { loadFleetVehicles } = require('./vehicles');
 
 const ok = (res, data, meta = {}) => res.json({ success: true, ...meta, data });
@@ -31,6 +32,45 @@ function queryPeriod(req) {
     from: req.query.from,
     to: req.query.to || req.query.date,
   });
+}
+
+function dtToCms(str) {
+  // Accept: YYYY-MM-DDTHH:MM (datetime-local) OR "YYYY-MM-DD HH:MM:SS"
+  const s = String(str || '').trim();
+  if (!s) return null;
+  if (s.includes('T')) return s.replace('T', ' ') + ':00';
+  if (/^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}(:\d{2})?$/.test(s)) return s.includes(':') && s.length === 16 ? s + ':00' : s;
+  return null;
+}
+
+function queryDateTimeRange(req) {
+  const p = queryPeriod(req);
+  const bt = dtToCms(req.query.begintime || req.query.begin || req.query.fromTs);
+  const et = dtToCms(req.query.endtime || req.query.end || req.query.toTs);
+  if (bt && et) {
+    return { period: p, begintime: bt, endtime: et };
+  }
+  // fallback to whole-day range
+  return {
+    period: p,
+    begintime: `${p.from} 00:00:00`,
+    endtime: `${p.to} 23:59:59`,
+  };
+}
+
+async function mapWithConcurrency(items, fn, concurrency = 6) {
+  const n = items.length;
+  if (!n) return [];
+  const out = new Array(n);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(concurrency, n) }, async () => {
+    while (next < n) {
+      const i = next++;
+      out[i] = await fn(items[i], i);
+    }
+  });
+  await Promise.all(workers);
+  return out;
 }
 
 router.post('/auth/login', (req, res) => {
@@ -197,35 +237,121 @@ router.post('/daily-log/report/live-refresh', async (req, res) => {
 });
 
 router.get('/daily-log/analytics/fuel-drops', async (req, res) => {
-  const period = queryPeriod(req);
   const minL = parseFloat(req.query.minL) || 20;
   const dropThresholdL = parseFloat(req.query.dropThresholdL) || dailyLog.getSettings().defaultDropThresholdL;
-  const forceRefresh = req.query.refresh === '1' || req.query.refresh === 'true';
+  const { period, begintime, endtime } = queryDateTimeRange(req);
   const vehicles = await loadVehicles(res);
   if (vehicles == null) return;
-  const report = await dailyLog.buildDailyFleetReport(vehicles, period.from, dropThresholdL, {
-    from: period.from,
-    to: period.to,
-    forceRefresh,
-  });
-  const hits = dailyLog.analyzeFleetFuelDrops(report.rows, minL, req.query.maxGapMin);
-  ok(res, { hits, minL, period }, { count: hits.length });
+
+  const maxGapMin = parseFloat(req.query.maxGapMin) || 180;
+  const maxGapMs = Math.max(1, maxGapMin) * 60 * 1000;
+  const concurrency = Math.max(1, Math.min(12, parseInt(process.env.ANALYTICS_CONCURRENCY || '', 10) || 6));
+
+  const perVehicle = await mapWithConcurrency(
+    vehicles,
+    async (v) => {
+      const devIdno = v.devIdno;
+      if (!devIdno) return [];
+      let tracks = [];
+      try {
+        tracks = await cms.getGPSHistory(devIdno, begintime, endtime);
+      } catch (_) {
+        return [];
+      }
+      const series = normalizeFuelPoints({ infos: tracks });
+      const evs = detectFuelEvents(series, dropThresholdL, dropThresholdL).filter((e) => e.type === 'drop' && e.litres >= minL);
+      const out = [];
+      for (let i = 0; i < evs.length; i++) {
+        const d = evs[i];
+        let gapMin = null;
+        if (i > 0 && evs[i - 1].time && d.time) {
+          const diff = d.time - evs[i - 1].time;
+          if (diff > 0) gapMin = Math.round(diff / 60000);
+        }
+        if (i === 0 || gapMin == null || (gapMin * 60000) <= maxGapMs) {
+          out.push({
+            devIdno,
+            plate: v.plate || v.nm || devIdno,
+            litres: d.litres,
+            at: d.timeStr || (d.time ? new Date(d.time).toISOString() : null),
+            minutesSincePrevDrop: gapMin,
+          });
+        }
+      }
+      return out;
+    },
+    concurrency,
+  );
+
+  const hits = perVehicle.flat().sort((a, b) => (b.litres || 0) - (a.litres || 0));
+  ok(res, { hits, minL, period, range: { begintime, endtime } }, { count: hits.length });
 });
 
 router.get('/daily-log/analytics/gprs-gaps', async (req, res) => {
-  const period = queryPeriod(req);
   const minGapMin = parseFloat(req.query.minGapMin) || 30;
   const dropThresholdL = parseFloat(req.query.dropThresholdL) || dailyLog.getSettings().defaultDropThresholdL;
-  const forceRefresh = req.query.refresh === '1' || req.query.refresh === 'true';
+  const { period, begintime, endtime } = queryDateTimeRange(req);
   const vehicles = await loadVehicles(res);
   if (vehicles == null) return;
-  const report = await dailyLog.buildDailyFleetReport(vehicles, period.from, dropThresholdL, {
-    from: period.from,
-    to: period.to,
-    forceRefresh,
-  });
-  const hits = dailyLog.analyzeFleetGprsGaps(report.rows, minGapMin);
-  ok(res, { hits, minGapMin, period }, { count: hits.length });
+
+  const minGapMs = Math.max(1, minGapMin) * 60 * 1000;
+  const concurrency = Math.max(1, Math.min(12, parseInt(process.env.ANALYTICS_CONCURRENCY || '', 10) || 6));
+  const endMs = new Date(endtime.replace(' ', 'T')).getTime();
+
+  const perVehicle = await mapWithConcurrency(
+    vehicles,
+    async (v) => {
+      const devIdno = v.devIdno;
+      if (!devIdno) return [];
+      let tracks = [];
+      try {
+        tracks = await cms.getGPSHistory(devIdno, begintime, endtime);
+      } catch (_) {
+        return [];
+      }
+      const pts = (tracks || [])
+        .map((t) => ({ ts: new Date(String(t.gpsTime || t.gt || '').replace(' ', 'T')).getTime(), iso: t.gpsTime || t.gt || null }))
+        .filter((p) => Number.isFinite(p.ts))
+        .sort((a, b) => a.ts - b.ts);
+
+      const hits = [];
+      for (let i = 1; i < pts.length; i++) {
+        const gap = pts[i].ts - pts[i - 1].ts;
+        if (gap >= minGapMs) {
+          hits.push({
+            devIdno,
+            plate: v.plate || v.nm || devIdno,
+            durationSecs: Math.round(gap / 1000),
+            durationLabel: `${Math.round(gap / 60000)}m`,
+            from: pts[i - 1].iso || new Date(pts[i - 1].ts).toISOString(),
+            to: pts[i].iso || new Date(pts[i].ts).toISOString(),
+          });
+        }
+      }
+
+      // stale at end of window (no recent GPS)
+      if (pts.length) {
+        const last = pts[pts.length - 1];
+        const staleGap = endMs - last.ts;
+        if (Number.isFinite(endMs) && staleGap >= minGapMs) {
+          hits.push({
+            devIdno,
+            plate: v.plate || v.nm || devIdno,
+            durationSecs: Math.round(staleGap / 1000),
+            durationLabel: `Stale GPS (${Math.round(staleGap / 60000)}m)`,
+            from: last.iso || new Date(last.ts).toISOString(),
+            to: null,
+          });
+        }
+      }
+
+      return hits;
+    },
+    concurrency,
+  );
+
+  const hits = perVehicle.flat().sort((a, b) => (b.durationSecs || 0) - (a.durationSecs || 0));
+  ok(res, { hits, minGapMin, period, range: { begintime, endtime } }, { count: hits.length });
 });
 
 router.post('/daily-log/entries', async (req, res) => {

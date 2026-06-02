@@ -10,6 +10,11 @@ import AnalyticsPanel from "./AnalyticsPanel.jsx";
 const THRESHOLD_OPTIONS = [5, 10, 15, 20, 25, 30, 40, 50];
 const LIVE_REFRESH_MS = 30000;
 const fuelTodayIso = () => new Date().toISOString().slice(0, 10);
+const dtLocalNowMinus = (mins) => {
+  const d = new Date(Date.now() - mins * 60000);
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+};
 
 function fmtTs(isoOrStr) {
   if (!isoOrStr) return "—";
@@ -28,8 +33,7 @@ export default function DailyReport({ username }) {
   const today = fuelTodayIso();
   const [vehicles, setVehicles] = useState([]);
   const [search, setSearch] = useState("");
-  const [dateFrom, setDateFrom] = useState(today);
-  const [dateTo, setDateTo] = useState(today);
+  const [reportDate, setReportDate] = useState(today);
   const [dropThreshold, setDropThreshold] = useState(20);
   const [reportRaw, setReportRaw] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -52,6 +56,8 @@ export default function DailyReport({ username }) {
   const [gprsGapMin, setGprsGapMin] = useState(30);
   const [newNote, setNewNote] = useState("");
   const [cameraDraft, setCameraDraft] = useState({ mode: "unchecked", badChannels: [] });
+  const [analyticsBeginTs, setAnalyticsBeginTs] = useState(() => dtLocalNowMinus(6 * 60));
+  const [analyticsEndTs, setAnalyticsEndTs] = useState(() => dtLocalNowMinus(0));
 
   useEffect(() => {
     apiFetch("/vehicles")
@@ -71,13 +77,7 @@ export default function DailyReport({ username }) {
     return ids;
   }, [vehicles, search]);
 
-  const periodLabel = useMemo(() => {
-    const f = dateFrom.slice(0, 10);
-    const t = dateTo.slice(0, 10);
-    return f === t ? f : `${f} → ${t}`;
-  }, [dateFrom, dateTo]);
-
-  const isSingleDayToday = dateFrom === today && dateTo === today;
+  const isToday = reportDate === today;
 
   const report = useMemo(() => {
     if (!reportRaw) return null;
@@ -98,8 +98,7 @@ export default function DailyReport({ username }) {
       setError(null);
       try {
         const q = new URLSearchParams({
-          from: dateFrom.slice(0, 10),
-          to: dateTo.slice(0, 10),
+          date: reportDate,
           dropThresholdL: String(dropThreshold),
         });
         if (forceRefresh) q.set("refresh", "1");
@@ -113,19 +112,18 @@ export default function DailyReport({ username }) {
         if (gen === loadGenRef.current) setLoading(false);
       }
     },
-    [dateFrom, dateTo, dropThreshold],
+    [reportDate, dropThreshold],
   );
 
   useEffect(() => {
     loadReport(false);
-  }, [dateFrom, dateTo, dropThreshold, loadReport]);
+  }, [reportDate, dropThreshold, loadReport]);
 
   const loadLiveRefresh = useCallback(async () => {
     if (!reportRaw?.rows?.length || loading) return;
     try {
       const q = new URLSearchParams({
-        from: dateFrom.slice(0, 10),
-        to: dateTo.slice(0, 10),
+        date: reportDate,
         dropThresholdL: String(dropThreshold),
       });
       const data = await apiFetch(`/daily-log/report/live-refresh?${q}`, { timeoutMs: 60000 });
@@ -136,13 +134,13 @@ export default function DailyReport({ username }) {
     } catch {
       /* keep last rows */
     }
-  }, [dateFrom, dateTo, dropThreshold, reportRaw?.rows?.length, loading]);
+  }, [reportDate, dropThreshold, reportRaw?.rows?.length, loading]);
 
   useEffect(() => {
-    if (!autoRefresh || !isSingleDayToday || !reportRaw?.rows?.length) return undefined;
+    if (!autoRefresh || !isToday || !reportRaw?.rows?.length) return undefined;
     const id = setInterval(loadLiveRefresh, LIVE_REFRESH_MS);
     return () => clearInterval(id);
-  }, [autoRefresh, isSingleDayToday, reportRaw?.rows?.length, loadLiveRefresh]);
+  }, [autoRefresh, isToday, reportRaw?.rows?.length, loadLiveRefresh]);
 
   useEffect(() => {
     if (!selectedDev) return undefined;
@@ -153,22 +151,17 @@ export default function DailyReport({ username }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [selectedDev]);
 
-  const periodQuery = useCallback(() => {
-    const q = new URLSearchParams({
-      from: dateFrom.slice(0, 10),
-      to: dateTo.slice(0, 10),
-      dropThresholdL: String(dropThreshold),
-    });
-    return q;
-  }, [dateFrom, dateTo, dropThreshold]);
-
   const loadAnalytics = useCallback(
     async (mode = "both") => {
       const minL = customFuelMin.trim() ? parseFloat(customFuelMin) : fuelDropMinL;
       setAnalyticsLoading(true);
       setError(null);
       try {
-        const base = periodQuery();
+        const base = new URLSearchParams({
+          begin: analyticsBeginTs,
+          end: analyticsEndTs,
+          dropThresholdL: String(dropThreshold),
+        });
         if (mode === "fuel" || mode === "both") {
           const fq = new URLSearchParams(base);
           fq.set("minL", String(minL));
@@ -186,7 +179,7 @@ export default function DailyReport({ username }) {
       }
       setAnalyticsLoading(false);
     },
-    [periodQuery, fuelDropMinL, customFuelMin, gprsGapMin],
+    [analyticsBeginTs, analyticsEndTs, dropThreshold, fuelDropMinL, customFuelMin, gprsGapMin],
   );
 
   const selected = report?.rows?.find((r) => r.devIdno === selectedDev) || null;
@@ -215,7 +208,7 @@ export default function DailyReport({ username }) {
     setSaving(true);
     setError(null);
     try {
-      const q = new URLSearchParams({ date: dateTo.slice(0, 10) });
+      const q = new URLSearchParams({ date: reportDate });
       const cam =
         patch.cameraStatus !== undefined ? patch.cameraStatus : cameraDraft;
       const body = {
@@ -281,7 +274,7 @@ export default function DailyReport({ username }) {
           devIdno: selectedDev,
           plate: selected?.plate,
           manualNote: newNote.trim(),
-          reportDate: dateTo.slice(0, 10),
+          reportDate,
           entryType: "notes",
         },
       });
@@ -297,8 +290,7 @@ export default function DailyReport({ username }) {
   const exportCsv = () => {
     const token = getToken();
     const q = new URLSearchParams({
-      from: dateFrom.slice(0, 10),
-      to: dateTo.slice(0, 10),
+      date: reportDate,
       dropThresholdL: String(dropThreshold),
     });
     fetch(`${API_BASE}/daily-log/report/export?${q}`, {
@@ -311,10 +303,7 @@ export default function DailyReport({ username }) {
       .then((blob) => {
         const a = document.createElement("a");
         a.href = URL.createObjectURL(blob);
-        a.download =
-          dateFrom === dateTo
-            ? `Helion_Daily_Report_${dateFrom}.csv`
-            : `Helion_Report_${dateFrom}_to_${dateTo}.csv`;
+        a.download = `Helion_Daily_Report_${reportDate}.csv`;
         a.click();
       })
       .catch((e) => setError(e.message));
@@ -383,24 +372,10 @@ export default function DailyReport({ username }) {
             placeholder="Filter table…"
           />
           <Inp
-            label="Period from"
+            label="CMS analytics day"
             type="date"
-            value={dateFrom}
-            onChange={(e) => {
-              const v = e.target.value;
-              setDateFrom(v);
-              if (v > dateTo) setDateTo(v);
-            }}
-          />
-          <Inp
-            label="Period to"
-            type="date"
-            value={dateTo}
-            onChange={(e) => {
-              const v = e.target.value;
-              setDateTo(v);
-              if (v < dateFrom) setDateFrom(v);
-            }}
+            value={reportDate}
+            onChange={(e) => setReportDate(e.target.value)}
           />
           <Sel
             label="Fuel drop alert (L)"
@@ -421,14 +396,14 @@ export default function DailyReport({ username }) {
               gap: 6,
               fontSize: 12,
               color: t.textSoft,
-              opacity: isSingleDayToday ? 1 : 0.5,
+              opacity: isToday ? 1 : 0.5,
             }}
-            title={isSingleDayToday ? "" : "Live refresh only for today (single day)"}
+            title={isToday ? "" : "Live refresh only for today"}
           >
             <input
               type="checkbox"
-              checked={autoRefresh && isSingleDayToday}
-              disabled={!isSingleDayToday}
+              checked={autoRefresh && isToday}
+              disabled={!isToday}
               onChange={(e) => setAutoRefresh(e.target.checked)}
             />
             Live update every 30s
@@ -468,7 +443,11 @@ export default function DailyReport({ username }) {
       <AnalyticsPanel
         view={analyticsView}
         onViewChange={setAnalyticsView}
-        periodLabel={periodLabel}
+        periodLabel="Custom range"
+        beginTs={analyticsBeginTs}
+        setBeginTs={setAnalyticsBeginTs}
+        endTs={analyticsEndTs}
+        setEndTs={setAnalyticsEndTs}
         fuelDropMinL={fuelDropMinL}
         setFuelDropMinL={setFuelDropMinL}
         customFuelMin={customFuelMin}
@@ -511,7 +490,7 @@ export default function DailyReport({ username }) {
       )}
 
       <Panel
-        title={`Fleet table — ${periodLabel}`}
+        title={`Fleet table — CMS day ${reportDate}`}
         subtitle="Click a row to edit cameras & notes. Table scrolls independently — close edit panel with ×."
       >
           {loading && !report ? (
