@@ -35,7 +35,18 @@ export default function App() {
   const isUsersAdmin = route === "/admin/users";
 
   return (
-    <div style={{ maxWidth: 1400, margin: "0 auto", padding: "16px 20px 40px" }}>
+    <div
+      style={{
+        maxWidth: isUsersAdmin ? 1400 : "100%",
+        margin: "0 auto",
+        padding: isUsersAdmin ? "16px 20px 40px" : "8px 12px 12px",
+        height: isUsersAdmin ? undefined : "100vh",
+        boxSizing: "border-box",
+        display: isUsersAdmin ? "block" : "flex",
+        flexDirection: isUsersAdmin ? undefined : "column",
+        overflow: isUsersAdmin ? undefined : "hidden",
+      }}
+    >
       {isUsersAdmin ? (
         <UsersAdmin user={user} />
       ) : (

@@ -121,6 +121,47 @@ router.delete('/admin/users/:username', requireAdmin, (req, res) => {
   ok(res, { deleted: users.deleteUser(un) });
 });
 
+/** Bulk SIM: body { updates: [{ plate?, devIdno?, simPhone }] } */
+router.post('/admin/bulk-phones', requireAdmin, async (req, res) => {
+  const updates = req.body?.updates;
+  if (!Array.isArray(updates)) return err(res, 'updates array required', 400);
+  let vehicles = [];
+  try {
+    vehicles = await cms.getVehicles();
+  } catch (_) {
+    /* match stored meta only */
+  }
+  const plateToDev = new Map();
+  for (const v of vehicles) {
+    const key = dailyLog.normPlateKey(v.plate || v.nm);
+    if (key && v.devIdno) plateToDev.set(key, String(v.devIdno));
+  }
+  const resolved = updates.map((u) => {
+    let devIdno = u.devIdno ? String(u.devIdno).trim() : '';
+    const plate = u.plate ? String(u.plate).trim() : '';
+    if (!devIdno && plate) {
+      devIdno = plateToDev.get(dailyLog.normPlateKey(plate)) || '';
+    }
+    return { ...u, devIdno: devIdno || u.devIdno, plate };
+  });
+  ok(res, dailyLog.bulkUpdateSimPhones(resolved));
+});
+
+/** Bulk bundle: body { devIdnos, bundlePurchasedDate?, bundleDurationDays } */
+router.post('/daily-log/bulk-bundle', async (req, res) => {
+  const { devIdnos, bundlePurchasedDate, bundleDurationDays } = req.body || {};
+  if (!Array.isArray(devIdnos) || !devIdnos.length) {
+    return err(res, 'devIdnos array required', 400);
+  }
+  const result = dailyLog.bulkAssignBundles({
+    devIdnos,
+    bundlePurchasedDate: bundlePurchasedDate || dailyLog.todayStr(),
+    bundleDurationDays,
+  });
+  if (result.error) return err(res, result.error, 400);
+  ok(res, result);
+});
+
 async function resolveDevIdno(id) {
   const s = String(id || '').trim();
   const vehicles = await cms.getVehicles();
@@ -193,43 +234,9 @@ router.get('/daily-log/report/quick', async (req, res) => {
     if (id) map.set(id, s);
   }
   const rows = vehicles.map((v, i) => {
-    const devIdno = v.devIdno || v.id;
-    const live = map.get(String(devIdno)) || null;
-    const online = live ? (live.ol ?? live.online ?? 0) !== 0 : false;
-    const row = {
-      no: i + 1,
-      devIdno,
-      plate: v.plate || v.nm || devIdno,
-      nm: v.nm,
-      reportDate: date,
-      live: live
-        ? {
-            online,
-            speed: live.speed,
-            fuel: live.fuel,
-            gpsTime: live.gpsTime,
-            accOn: live.accOn,
-            lat: live.lat,
-            lng: live.lng,
-            ps: live.ps != null ? String(live.ps) : null,
-          }
-        : null,
-      helionStatus: online ? 'connected' : 'offline',
-      helionLabel: online ? 'Connected' : 'Offline',
-      hasIssues: false,
-      issues: [],
-      notes: dailyLog.getManualInspection(devIdno, date)?.notes || '',
-      bundlePurchasedDate: dailyLog.getVehicleMeta(devIdno)?.bundlePurchasedDate || null,
-      camerasOk: dailyLog.getManualInspection(devIdno, date)?.camerasOk ?? null,
-      cameraStatus: dailyLog.getManualInspection(devIdno, date)?.cameraStatus ?? null,
-      badChannels: dailyLog.getManualInspection(devIdno, date)?.badChannels ?? [],
-      gprsLocation: null,
-      connectivity: { lastGpsAt: live?.gpsTime || null, offlineSpells: [] },
-      offlineDurationSecs: 0,
-    };
-    enrichMonitorFields(row);
-    // gprsDisplay already includes parked/driving + coords from live
-    row.hasIssues = row.fuelDisplay?.status === 'error' || row.gprsDisplay?.status === 'error' || row.antennaDisplay?.status === 'error';
+    const row = dailyLog.buildQuickRowForVehicle(v, date, map);
+    row.no = i + 1;
+    row.nm = v.nm;
     if (row.hasIssues) row.issues.push({ code: 'monitor', message: 'Monitoring issue', severity: 'low' });
     return row;
   });
@@ -281,7 +288,15 @@ router.get('/daily-log/vehicle/:id/history', async (req, res) => {
 router.patch('/daily-log/report/:id', async (req, res) => {
   const devIdno = await resolveDevIdno(req.params.id);
   const date = (req.query.date || req.body?.reportDate || dailyLog.todayStr()).slice(0, 10);
-  const { camerasOk, cameraStatus, badChannels, notes, bundlePurchasedDate } = req.body || {};
+  const {
+    camerasOk,
+    cameraStatus,
+    badChannels,
+    notes,
+    bundlePurchasedDate,
+    bundleDurationDays,
+    simPhone,
+  } = req.body || {};
   let vehicles;
   try {
     vehicles = await cms.getVehicles();
@@ -298,11 +313,22 @@ router.patch('/daily-log/report/:id', async (req, res) => {
       badChannels,
       notes,
       bundlePurchasedDate,
+      bundleDurationDays,
+      simPhone,
       plate: v.plate || v.nm,
     },
     req.user?.username || null,
   );
-  const row = await dailyLog.buildInspectionForVehicle(v, date, dailyLog.getSettings().defaultDropThresholdL);
+  const statuses = await cms.getAllGPS().catch(() => []);
+  const liveMap = new Map();
+  for (const s of statuses) {
+    const id = String(s.devIdno || s.id || '');
+    if (id) liveMap.set(id, s);
+  }
+  const row = dailyLog.buildQuickRowForVehicle(v, date, liveMap);
+  row.no =
+    (req.body?.rowNo != null ? Number(req.body.rowNo) : null) ||
+    undefined;
   const manualHistory = dailyLog.getManualHistory(devIdno, { limit: 100 });
   ok(res, { manual: saved.inspection, vehicleMeta: saved.vehicleMeta, row, manualHistory });
 });

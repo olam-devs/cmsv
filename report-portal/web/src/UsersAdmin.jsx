@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { apiFetch } from "./api.js";
+import { HELION_SIM_IMPORT_LINES } from "./helionSimSeed.js";
 import { useTheme } from "./theme.jsx";
 import { Btn, ErrorBanner, Inp, Panel, Spinner } from "./ui/primitives.jsx";
 
@@ -12,6 +13,8 @@ export default function UsersAdmin({ user }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [role, setRole] = useState("user");
+  const [bulkPhones, setBulkPhones] = useState("");
+  const [bulkResult, setBulkResult] = useState(null);
 
   const isAdmin = user?.role === "admin";
 
@@ -52,6 +55,46 @@ export default function UsersAdmin({ user }) {
       setPassword("");
       setRole("user");
       await load();
+    } catch (e) {
+      setErr(e.message || String(e));
+    }
+  };
+
+  const importPhones = async () => {
+    setErr("");
+    setBulkResult(null);
+    const lines = bulkPhones
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean);
+    const updates = [];
+    for (const line of lines) {
+      const parts = line.split(/[,\t|]/).map((p) => p.trim()).filter(Boolean);
+      if (parts.length < 2) continue;
+      if (parts.length >= 3) {
+        const [plate, devIdno, phone] = parts;
+        updates.push({ plate, devIdno, simPhone: phone });
+        continue;
+      }
+      const [a, b] = parts;
+      if (/^\d{10,}$/.test(String(b).replace(/\D/g, ""))) {
+        updates.push(
+          /^\d{3,6}$/.test(a) ? { devIdno: a, simPhone: b } : { plate: a, simPhone: b },
+        );
+      } else {
+        updates.push(
+          /^\d{3,6}$/.test(b) ? { devIdno: b, simPhone: a } : { plate: b, simPhone: a },
+        );
+      }
+    }
+    if (!updates.length) {
+      setErr("No valid lines. Use: plate,phone or devIdno,phone per line.");
+      return;
+    }
+    try {
+      const res = await apiFetch("/admin/bulk-phones", { method: "POST", body: { updates } });
+      setBulkResult(res);
+      setBulkPhones("");
     } catch (e) {
       setErr(e.message || String(e));
     }
@@ -124,6 +167,40 @@ export default function UsersAdmin({ user }) {
             Refresh list
           </Btn>
         </div>
+      </Panel>
+
+      <Panel
+        title="Bulk SIM / phone import"
+        subtitle="One line per vehicle: plate,phone or devIdno,phone (comma, tab, or pipe separated)."
+      >
+        <textarea
+          value={bulkPhones}
+          onChange={(e) => setBulkPhones(e.target.value)}
+          rows={8}
+          placeholder={"ABC123,08012345678\n10001,08098765432"}
+          style={{
+            width: "100%",
+            boxSizing: "border-box",
+            borderRadius: 10,
+            border: `1px solid ${t.border}`,
+            padding: 10,
+            fontFamily: "inherit",
+            fontSize: 12,
+          }}
+        />
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+          <Btn onClick={importPhones} disabled={!bulkPhones.trim()}>
+            Import phones
+          </Btn>
+          <Btn onClick={() => setBulkPhones(HELION_SIM_IMPORT_LINES)} style={{ background: t.bg, color: t.text }}>
+            Load Helion list (47)
+          </Btn>
+        </div>
+        {bulkResult?.updated != null && (
+          <div style={{ marginTop: 8, fontSize: 12, color: t.textSoft }}>
+            Updated <strong>{bulkResult.updated}</strong> vehicle(s).
+          </div>
+        )}
       </Panel>
 
       <Panel title={`Users (${sorted.length})`} subtitle="Only admin sees this page.">

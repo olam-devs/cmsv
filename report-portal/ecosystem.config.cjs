@@ -5,6 +5,7 @@ module.exports = {
       name: 'helion-report-portal',
       cwd: __dirname + '/server',
       script: 'src/index.js',
+      exec_mode: 'fork',
       instances: 1,
       autorestart: true,
       max_memory_restart: '512M',

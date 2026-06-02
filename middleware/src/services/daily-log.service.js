@@ -19,6 +19,7 @@ const { analyzeGpsTrack, buildInspectionRow } = require('../utils/daily-inspecti
 const { sortDailyReportRows } = require('../utils/daily-report-sort');
 const { enrichMonitorFields, enrichMonitorFieldsAsync } = require('../utils/report-monitor-fields');
 const cameraManual = require('../utils/camera-manual');
+const { attachBundleFields } = require('../utils/bundle-meta');
 const uptimeAnalytics = require('./uptime-analytics.service');
 
 const FILE = path.join(__dirname, '../../../data/daily-log.json');
@@ -187,6 +188,8 @@ function ensureVehicleMeta(devIdno, plate = '') {
       devIdno: id,
       plate: String(plate || ''),
       bundlePurchasedDate: null,
+      bundleDurationDays: null,
+      simPhone: null,
       lastCmsSyncAt: null,
       lastManualEditAt: null,
       lastGpsUploadAt: null,
@@ -224,6 +227,14 @@ function saveManualInspection(devIdno, reportDate, patch = {}, createdBy = null)
     const d = patch.bundlePurchasedDate;
     meta.bundlePurchasedDate = d ? String(d).slice(0, 10) : null;
   }
+  if (patch.bundleDurationDays !== undefined) {
+    const n = parseInt(patch.bundleDurationDays, 10);
+    meta.bundleDurationDays = Number.isFinite(n) && n > 0 ? n : null;
+  }
+  if (patch.simPhone !== undefined) {
+    const p = String(patch.simPhone || '').trim();
+    meta.simPhone = p || null;
+  }
 
   let cameraStatus = prev.cameraStatus
     ? cameraManual.normalizeCameraStatus(prev.cameraStatus)
@@ -238,6 +249,13 @@ function saveManualInspection(devIdno, reportDate, patch = {}, createdBy = null)
     });
   }
 
+  const prevCamJson = JSON.stringify(
+    cameraManual.normalizeCameraStatus(prev.cameraStatus || { camerasOk: prev.camerasOk }),
+  );
+  const newCamJson = JSON.stringify(cameraStatus);
+  const cameraChanged =
+    (patch.cameraStatus !== undefined || patch.camerasOk !== undefined) && prevCamJson !== newCamJson;
+
   store.inspections[key] = {
     ...prev,
     devIdno: String(devIdno),
@@ -246,6 +264,8 @@ function saveManualInspection(devIdno, reportDate, patch = {}, createdBy = null)
     camerasOk: cameraManual.deriveCamerasOk(cameraStatus),
     badChannels: cameraStatus.badChannels || [],
     notes: patch.notes !== undefined ? String(patch.notes) : prev.notes,
+    lastCameraEditedBy: cameraChanged ? createdBy || prev.lastCameraEditedBy : prev.lastCameraEditedBy,
+    lastCameraEditedAt: cameraChanged ? now : prev.lastCameraEditedAt,
     updatedAt: now,
   };
 
@@ -253,32 +273,25 @@ function saveManualInspection(devIdno, reportDate, patch = {}, createdBy = null)
   save();
 
   const parts = [];
-  if (patch.cameraStatus !== undefined || patch.camerasOk !== undefined) {
-    parts.push(`cameras=${cameraManual.toNote(cameraStatus) || cameraStatus.mode}`);
+  if (cameraChanged) parts.push(`cameras=${cameraManual.toNote(cameraStatus) || cameraStatus.mode}`);
+  if (patch.notes !== undefined) parts.push('day notes updated');
+  if (patch.bundlePurchasedDate !== undefined || patch.bundleDurationDays !== undefined) {
+    parts.push(`bundle=${meta.bundlePurchasedDate || '—'} / ${meta.bundleDurationDays || '?'}d`);
   }
-  if (patch.notes !== undefined && patch.notes) parts.push('notes updated');
-  if (patch.bundlePurchasedDate !== undefined) parts.push(`bundle=${meta.bundlePurchasedDate || 'cleared'}`);
+  if (patch.simPhone !== undefined) parts.push('sim updated');
 
-  pushSyncLog({
-    devIdno: String(devIdno),
-    plate: meta.plate,
-    type: 'manual_edit',
-    cmsReportDate: String(reportDate).slice(0, 10),
-    summary: parts.join('; ') || 'Manual update',
-    createdBy,
-  });
-
-  if (patch.notes !== undefined && String(patch.notes).trim()) {
-    createEntry({
-      devIdno,
+  if (parts.length) {
+    pushSyncLog({
+      devIdno: String(devIdno),
       plate: meta.plate,
-      manualNote: String(patch.notes).trim(),
-      reportDate,
-      fields: { type: 'notes' },
+      type: 'manual_edit',
+      cmsReportDate: String(reportDate).slice(0, 10),
+      summary: parts.join('; '),
       createdBy,
     });
   }
-  if (patch.cameraStatus !== undefined || patch.camerasOk !== undefined) {
+
+  if (cameraChanged) {
     createEntry({
       devIdno,
       plate: meta.plate,
@@ -292,6 +305,117 @@ function saveManualInspection(devIdno, reportDate, patch = {}, createdBy = null)
   return { inspection: store.inspections[key], vehicleMeta: meta };
 }
 
+function enrichRowFromMeta(row, devIdno, reportDate) {
+  const meta = getVehicleMeta(devIdno) || {};
+  const manual = getManualInspection(devIdno, reportDate);
+  attachBundleFields(row, meta);
+  row.notes = manual.notes != null ? manual.notes : row.notes || '';
+  row.camerasEditedBy = manual.lastCameraEditedBy || null;
+  row.camerasEditedAt = manual.lastCameraEditedAt || null;
+  const camSum = cameraManual.toSummary(
+    manual.cameraStatus || { camerasOk: manual.camerasOk, badChannels: manual.badChannels },
+  );
+  row.cameraStatus = camSum.status;
+  row.camerasLabel = camSum.label;
+  row.camerasOk = camSum.ok;
+  return row;
+}
+
+function buildQuickRowForVehicle(vehicle, reportDate, liveByDev) {
+  const devIdno = vehicle.devIdno || vehicle.id;
+  const plate = vehicle.plate || vehicle.nm || devIdno;
+  const live = liveByDev?.get(String(devIdno)) || null;
+  const online = live ? (live.ol ?? live.online ?? 0) !== 0 : false;
+  const row = {
+    devIdno,
+    plate,
+    reportDate,
+    live: live
+      ? {
+          online,
+          speed: live.speed,
+          fuel: live.fuel,
+          gpsTime: live.gpsTime,
+          accOn: live.accOn,
+          lat: live.lat,
+          lng: live.lng,
+          ps: live.ps != null ? String(live.ps) : null,
+        }
+      : null,
+    sim: vehicle.dl?.[0]?.sim != null ? String(vehicle.dl[0].sim) : vehicle.sim || '',
+    helionStatus: online ? 'connected' : 'offline',
+    helionLabel: online ? 'Connected' : 'Offline',
+    hasIssues: false,
+    issues: [],
+    connectivity: { lastGpsAt: live?.gpsTime || null, offlineSpells: [] },
+    offlineDurationSecs: 0,
+  };
+  enrichRowFromMeta(row, devIdno, reportDate);
+  enrichMonitorFields(row);
+  row.hasIssues =
+    row.bundleLow ||
+    row.fuelDisplay?.status === 'error' ||
+    row.gprsDisplay?.status === 'error' ||
+    row.antennaDisplay?.status === 'error';
+  return row;
+}
+
+function normPlateKey(s) {
+  return String(s || '')
+    .replace(/\s*\([^)]*\)\s*/g, ' ')
+    .replace(/\s+/g, '')
+    .toLowerCase();
+}
+
+function bulkUpdateSimPhones(updates = []) {
+  let count = 0;
+  const skipped = [];
+  for (const u of updates) {
+    const devIdno = u.devIdno ? String(u.devIdno).trim() : '';
+    const plate = u.plate ? String(u.plate).trim() : '';
+    const phone = String(u.simPhone || u.phone || '').trim();
+    if (!phone) continue;
+    let id = devIdno;
+    if (!id && plate) {
+      const key = normPlateKey(plate);
+      const hit = Object.values(store.vehicleMeta).find(
+        (m) => normPlateKey(m.plate) === key,
+      );
+      if (hit) id = hit.devIdno;
+    }
+    if (!id) {
+      skipped.push({ plate, devIdno, reason: 'no_match' });
+      continue;
+    }
+    const meta = ensureVehicleMeta(id, plate || undefined);
+    meta.simPhone = phone;
+    if (plate) meta.plate = plate.replace(/\s*\([^)]*\)\s*/g, ' ').replace(/\s+/g, ' ').trim();
+    count += 1;
+  }
+  if (count) save();
+  return { updated: count, skipped: skipped.length ? skipped : undefined };
+}
+
+function bulkAssignBundles({ devIdnos = [], bundlePurchasedDate, bundleDurationDays }) {
+  const date = bundlePurchasedDate
+    ? String(bundlePurchasedDate).slice(0, 10)
+    : todayStr();
+  const days = parseInt(bundleDurationDays, 10);
+  if (!Number.isFinite(days) || days <= 0) {
+    return { updated: 0, error: 'bundleDurationDays must be a positive number' };
+  }
+  const ids = [...new Set(devIdnos.map((id) => String(id).trim()).filter(Boolean))];
+  let count = 0;
+  for (const id of ids) {
+    const meta = ensureVehicleMeta(id);
+    meta.bundlePurchasedDate = date;
+    meta.bundleDurationDays = days;
+    count += 1;
+  }
+  if (count) save();
+  return { updated: count, bundlePurchasedDate: date, bundleDurationDays: days };
+}
+
 function attachVehicleTimestamps(row, devIdno, cmsReportDate) {
   const meta = ensureVehicleMeta(devIdno, row.plate);
   const syncedAt = new Date().toISOString();
@@ -300,7 +424,7 @@ function attachVehicleTimestamps(row, devIdno, cmsReportDate) {
   else if (row.connectivity?.lastGpsAt) meta.lastGpsUploadAt = row.connectivity.lastGpsAt;
 
   row.cmsReportDate = cmsReportDate;
-  row.bundlePurchasedDate = meta.bundlePurchasedDate;
+  attachBundleFields(row, meta);
   row.cmsDataSyncedAt = syncedAt;
   row.lastManualEditAt = meta.lastManualEditAt;
   row.lastGpsUploadAt = meta.lastGpsUploadAt || row.live?.gpsTime || null;
@@ -833,4 +957,9 @@ module.exports = {
   analyzeFleetFuelDrops,
   analyzeFleetGprsGaps,
   pushSyncLog,
+  enrichRowFromMeta,
+  buildQuickRowForVehicle,
+  bulkUpdateSimPhones,
+  bulkAssignBundles,
+  normPlateKey,
 };

@@ -6,6 +6,10 @@ export default function VehicleEditDrawer({
   selected,
   bundleDraft,
   setBundleDraft,
+  bundleDurationDraft,
+  setBundleDurationDraft,
+  simPhoneDraft,
+  setSimPhoneDraft,
   cameraDraft,
   setCameraDraft,
   noteDraft,
@@ -13,7 +17,6 @@ export default function VehicleEditDrawer({
   newNote,
   setNewNote,
   manualHistory,
-  updateHistory,
   saving,
   onSave,
   onAddNote,
@@ -23,6 +26,9 @@ export default function VehicleEditDrawer({
 }) {
   const { t } = useTheme();
   if (!selected) return null;
+
+  const daysLeft = selected.bundleDaysLeft;
+  const bundleLow = selected.bundleLow;
 
   return (
     <>
@@ -44,7 +50,7 @@ export default function VehicleEditDrawer({
           position: "fixed",
           top: 0,
           right: 0,
-          width: "min(400px, 92vw)",
+          width: "min(420px, 92vw)",
           height: "100vh",
           background: t.panel,
           boxShadow: "-8px 0 32px rgba(0,0,0,0.2)",
@@ -98,22 +104,70 @@ export default function VehicleEditDrawer({
           }}
         >
           <Inp
-            label="Data bundle purchased"
-            type="date"
-            value={bundleDraft}
-            onChange={(e) => setBundleDraft(e.target.value)}
+            label="SIM / phone number"
+            value={simPhoneDraft}
+            onChange={(e) => setSimPhoneDraft(e.target.value)}
+            placeholder="e.g. 08012345678"
           />
+
+          <div style={{ marginTop: 12 }}>
+            <Inp
+              label="Data bundle purchased (start date)"
+              type="date"
+              value={bundleDraft}
+              onChange={(e) => setBundleDraft(e.target.value)}
+            />
+            <Inp
+              label="Bundle valid for (days until next payment)"
+              type="number"
+              min={1}
+              value={bundleDurationDraft}
+              onChange={(e) => setBundleDurationDraft(e.target.value)}
+              placeholder="e.g. 30"
+            />
+            {daysLeft != null && (
+              <div
+                style={{
+                  marginTop: 8,
+                  padding: "8px 10px",
+                  borderRadius: 8,
+                  fontSize: 12,
+                  fontWeight: 700,
+                  background: bundleLow ? "#fecaca" : "#dcfce7",
+                  color: bundleLow ? "#991b1b" : "#166534",
+                }}
+              >
+                {daysLeft <= 0
+                  ? "Bundle expired or due today"
+                  : `${daysLeft} day${daysLeft === 1 ? "" : "s"} left`}
+                {selected.bundleEndsOn ? (
+                  <span style={{ fontWeight: 500, marginLeft: 6 }}>
+                    (ends {fmtDay(selected.bundleEndsOn)})
+                  </span>
+                ) : null}
+              </div>
+            )}
+          </div>
+
           <div style={{ marginTop: 12, fontSize: 11, color: t.textSoft, lineHeight: 1.45 }}>
             {selected.autoNotes}
           </div>
 
           <div style={{ marginTop: 16 }}>
             <div style={{ fontSize: 12, fontWeight: 800, marginBottom: 10 }}>Cameras (1–6)</div>
+            {selected.camerasEditedBy ? (
+              <div style={{ fontSize: 10, color: t.textSoft, marginBottom: 8 }}>
+                Last camera edit: <strong>{selected.camerasEditedBy}</strong>
+                {selected.camerasEditedAt ? ` · ${fmtTs(selected.camerasEditedAt)}` : ""}
+              </div>
+            ) : null}
             <CameraEditor value={cameraDraft} onChange={setCameraDraft} disabled={saving} />
           </div>
 
           <div style={{ marginTop: 16 }}>
-            <div style={{ fontSize: 12, fontWeight: 800, marginBottom: 6 }}>Notes (today)</div>
+            <div style={{ fontSize: 12, fontWeight: 800, marginBottom: 6 }}>
+              Day notes (saved with vehicle — not duplicated in history)
+            </div>
             <textarea
               value={noteDraft}
               onChange={(e) => setNoteDraft(e.target.value)}
@@ -135,7 +189,9 @@ export default function VehicleEditDrawer({
           </Btn>
 
           <div style={{ marginTop: 20, borderTop: `1px solid ${t.border}`, paddingTop: 14 }}>
-            <div style={{ fontSize: 12, fontWeight: 800, marginBottom: 6 }}>Add history entry</div>
+            <div style={{ fontSize: 12, fontWeight: 800, marginBottom: 6 }}>
+              Add history entry (unlimited per day)
+            </div>
             <textarea
               value={newNote}
               onChange={(e) => setNewNote(e.target.value)}

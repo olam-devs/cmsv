@@ -28,6 +28,27 @@ function fmtDay(iso) {
   return String(iso).slice(0, 10);
 }
 
+const BUNDLE_WARN_DAYS = 5;
+
+function mergeBundleOnRow(row, date, days) {
+  const start = new Date(`${date}T12:00:00`);
+  const end = new Date(start);
+  end.setDate(end.getDate() + Number(days));
+  const today = new Date();
+  today.setHours(12, 0, 0, 0);
+  const daysLeft = Math.ceil((end.getTime() - today.getTime()) / 86400000);
+  const bundleLow = daysLeft <= BUNDLE_WARN_DAYS;
+  return {
+    ...row,
+    bundlePurchasedDate: date,
+    bundleDurationDays: days,
+    bundleEndsOn: end.toISOString().slice(0, 10),
+    bundleDaysLeft: daysLeft,
+    bundleLow,
+    hasIssues: Boolean(row.hasIssues) || bundleLow,
+  };
+}
+
 export default function DailyReport({ username, user }) {
   const { t } = useTheme();
   const today = fuelTodayIso();
@@ -42,6 +63,9 @@ export default function DailyReport({ username, user }) {
   const [selectedDev, setSelectedDev] = useState(null);
   const [noteDraft, setNoteDraft] = useState("");
   const [bundleDraft, setBundleDraft] = useState("");
+  const [bundleDurationDraft, setBundleDurationDraft] = useState("");
+  const [simPhoneDraft, setSimPhoneDraft] = useState("");
+  const savingRef = useRef(false);
   const [updateHistory, setUpdateHistory] = useState(null);
   const [manualHistory, setManualHistory] = useState([]);
   const [saving, setSaving] = useState(false);
@@ -61,6 +85,10 @@ export default function DailyReport({ username, user }) {
   const [tableMode, setTableMode] = useState("quick"); // quick | full
   const [tableFull, setTableFull] = useState(false);
   const [statusFilter, setStatusFilter] = useState("all"); // all|online|offline|issues|driving|parked
+  const [checkedDevs, setCheckedDevs] = useState(() => new Set());
+  const [bulkBundleStart, setBulkBundleStart] = useState(today);
+  const [bulkBundleDays, setBulkBundleDays] = useState("30");
+  const [bulkApplying, setBulkApplying] = useState(false);
 
   useEffect(() => {
     apiFetch("/vehicles")
@@ -68,31 +96,9 @@ export default function DailyReport({ username, user }) {
       .catch(() => setVehicles([]));
   }, []);
 
-  const devFilter = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return null;
-    const ids = new Set();
-    for (const v of vehicles) {
-      const plate = String(v.plate || v.nm || "").toLowerCase();
-      const id = String(v.devIdno || "").toLowerCase();
-      if (plate.includes(q) || id.includes(q)) ids.add(v.devIdno);
-    }
-    return ids;
-  }, [vehicles, search]);
-
   const isToday = reportDate === today;
 
-  const report = useMemo(() => {
-    if (!reportRaw) return null;
-    const rows =
-      devFilter && devFilter.size > 0
-        ? (reportRaw.rows || []).filter((r) => devFilter.has(r.devIdno))
-        : reportRaw.rows || [];
-    const issues = (reportRaw.issues || []).filter(
-      (i) => !devFilter?.size || devFilter.has(i.devIdno),
-    );
-    return { ...reportRaw, rows, issues };
-  }, [reportRaw, devFilter]);
+  const report = useMemo(() => reportRaw, [reportRaw]);
 
   const loadReport = useCallback(
     async (forceRefresh = false) => {
@@ -201,6 +207,12 @@ export default function DailyReport({ username, user }) {
     setSelectedDev(row.devIdno);
     setNoteDraft(row.notes || "");
     setBundleDraft(row.bundlePurchasedDate || "");
+    setBundleDurationDraft(
+      row.bundleDurationDays != null && row.bundleDurationDays !== ""
+        ? String(row.bundleDurationDays)
+        : "",
+    );
+    setSimPhoneDraft(row.sim || "");
     setNewNote("");
     setCameraDraft(cameraStatusFromRow(row));
     try {
@@ -217,13 +229,18 @@ export default function DailyReport({ username, user }) {
   };
 
   const saveManual = async (patch) => {
-    if (!selectedDev) return;
+    if (!selectedDev || savingRef.current) return;
+    savingRef.current = true;
     setSaving(true);
     setError(null);
     try {
       const q = new URLSearchParams({ date: reportDate });
       const cam =
         patch.cameraStatus !== undefined ? patch.cameraStatus : cameraDraft;
+      const dur =
+        patch.bundleDurationDays !== undefined
+          ? patch.bundleDurationDays
+          : bundleDurationDraft;
       const body = {
         cameraStatus: cam,
         camerasOk:
@@ -234,6 +251,10 @@ export default function DailyReport({ username, user }) {
           patch.bundlePurchasedDate !== undefined
             ? patch.bundlePurchasedDate
             : bundleDraft || null,
+        bundleDurationDays: dur === "" || dur == null ? null : parseInt(dur, 10),
+        simPhone:
+          patch.simPhone !== undefined ? patch.simPhone : simPhoneDraft.trim() || null,
+        rowNo: report?.rows?.find((r) => r.devIdno === selectedDev)?.no,
       };
       const res = await apiFetch(
         `/daily-log/report/${encodeURIComponent(selectedDev)}?${q}`,
@@ -243,7 +264,7 @@ export default function DailyReport({ username, user }) {
       setReportRaw((prev) => {
         if (!prev) return prev;
         const rows = prev.rows.map((r) =>
-          r.devIdno === selectedDev ? { ...r, ...row } : r,
+          r.devIdno === selectedDev ? { ...r, ...row, no: r.no } : r,
         );
         return {
           ...prev,
@@ -273,12 +294,15 @@ export default function DailyReport({ username, user }) {
       }
     } catch (e) {
       setError(e.message);
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
     }
-    setSaving(false);
   };
 
   const addManualNote = async () => {
-    if (!selectedDev || !newNote.trim()) return;
+    if (!selectedDev || !newNote.trim() || savingRef.current) return;
+    savingRef.current = true;
     setSaving(true);
     try {
       await apiFetch("/daily-log/entries", {
@@ -296,8 +320,10 @@ export default function DailyReport({ username, user }) {
       if (row) await selectRow(row);
     } catch (e) {
       setError(e.message);
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
     }
-    setSaving(false);
   };
 
   const exportCsv = () => {
@@ -322,21 +348,164 @@ export default function DailyReport({ username, user }) {
       .catch((e) => setError(e.message));
   };
 
-  const filteredRows = report?.rows || [];
   const visibleRows = useMemo(() => {
-    const rows = filteredRows;
-    if (statusFilter === "all") return rows;
-    if (statusFilter === "online") return rows.filter((r) => r.helionStatus === "connected");
-    if (statusFilter === "offline") return rows.filter((r) => r.helionStatus !== "connected");
-    if (statusFilter === "issues") return rows.filter((r) => r.hasIssues);
-    if (statusFilter === "driving") return rows.filter((r) => r.gprsDisplay?.moving === true);
-    if (statusFilter === "parked") return rows.filter((r) => r.gprsDisplay?.moving === false);
+    let rows = report?.rows || [];
+    const q = search.trim().toLowerCase();
+    if (q) {
+      rows = rows.filter(
+        (r) =>
+          String(r.plate || "").toLowerCase().includes(q) ||
+          String(r.devIdno || "").toLowerCase().includes(q) ||
+          String(r.sim || "").toLowerCase().includes(q),
+      );
+    }
+    if (statusFilter === "online") rows = rows.filter((r) => r.helionStatus === "connected");
+    else if (statusFilter === "offline") rows = rows.filter((r) => r.helionStatus !== "connected");
+    else if (statusFilter === "issues") rows = rows.filter((r) => r.hasIssues || r.bundleLow);
+    else if (statusFilter === "driving") rows = rows.filter((r) => r.gprsDisplay?.moving === true);
+    else if (statusFilter === "parked") rows = rows.filter((r) => r.gprsDisplay?.moving === false);
+    else if (statusFilter === "bundle_low") rows = rows.filter((r) => r.bundleLow);
     return rows;
-  }, [filteredRows, statusFilter]);
+  }, [report?.rows, statusFilter, search]);
   const topIssues = (report?.issues || []).slice(0, 12);
+  const checkedCount = checkedDevs.size;
+
+  const toggleCheck = (devIdno, e) => {
+    e.stopPropagation();
+    setCheckedDevs((prev) => {
+      const next = new Set(prev);
+      if (next.has(devIdno)) next.delete(devIdno);
+      else next.add(devIdno);
+      return next;
+    });
+  };
+
+  const selectAllVisible = () => {
+    setCheckedDevs(new Set(visibleRows.map((r) => r.devIdno)));
+  };
+
+  const clearChecked = () => setCheckedDevs(new Set());
+
+  const applyBulkBundle = async () => {
+    const days = parseInt(bulkBundleDays, 10);
+    if (!checkedCount || !Number.isFinite(days) || days <= 0) return;
+    if (savingRef.current) return;
+    savingRef.current = true;
+    setBulkApplying(true);
+    setError(null);
+    try {
+      const devIdnos = [...checkedDevs];
+      const res = await apiFetch("/daily-log/bulk-bundle", {
+        method: "POST",
+        body: {
+          devIdnos,
+          bundlePurchasedDate: bulkBundleStart || today,
+          bundleDurationDays: days,
+        },
+      });
+      const date = res?.bundlePurchasedDate || bulkBundleStart;
+      const idSet = new Set(devIdnos);
+      setReportRaw((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          rows: prev.rows.map((r) =>
+            idSet.has(r.devIdno) ? mergeBundleOnRow(r, date, days) : r,
+          ),
+        };
+      });
+      clearChecked();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      savingRef.current = false;
+      setBulkApplying(false);
+    }
+  };
+
+  const tableToolbar = (
+    <div
+      style={{
+        display: "flex",
+        flexWrap: "wrap",
+        gap: 10,
+        alignItems: "flex-end",
+        padding: "10px 12px",
+        background: t.panelBright,
+        borderBottom: `1px solid ${t.border}`,
+        position: "sticky",
+        top: 0,
+        zIndex: 4,
+      }}
+    >
+      <Inp
+        label="Search plate / device / SIM"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        placeholder="Type to filter…"
+      />
+      <Sel
+        label="Status filter"
+        value={statusFilter}
+        onChange={(e) => setStatusFilter(e.target.value)}
+        options={[
+          { value: "all", label: "All vehicles" },
+          { value: "online", label: "Online" },
+          { value: "offline", label: "Offline" },
+          { value: "driving", label: "Driving" },
+          { value: "parked", label: "Parked" },
+          { value: "issues", label: "Issues / alerts" },
+          { value: "bundle_low", label: "Bundle expiring soon" },
+        ]}
+      />
+      <Btn type="button" onClick={selectAllVisible} disabled={!visibleRows.length}>
+        Select all visible
+      </Btn>
+      <Btn type="button" onClick={clearChecked} disabled={!checkedCount}>
+        Clear ({checkedCount})
+      </Btn>
+      <Inp
+        label="Bundle start"
+        type="date"
+        value={bulkBundleStart}
+        onChange={(e) => setBulkBundleStart(e.target.value)}
+      />
+      <Inp
+        label="Valid (days)"
+        type="number"
+        min={1}
+        value={bulkBundleDays}
+        onChange={(e) => setBulkBundleDays(e.target.value)}
+        placeholder="30"
+      />
+      <Btn
+        type="button"
+        onClick={applyBulkBundle}
+        disabled={!checkedCount || bulkApplying}
+      >
+        {bulkApplying ? "Applying…" : `Set bundle (${checkedCount})`}
+      </Btn>
+      <Btn onClick={() => setTableFull((v) => !v)} disabled={!report?.rows?.length}>
+        {tableFull ? "Exit full screen" : "Full screen"}
+      </Btn>
+      <div style={{ fontSize: 12, color: t.textSoft, marginLeft: "auto" }}>
+        Showing <strong style={{ color: t.text }}>{visibleRows.length}</strong>
+        {report?.rows?.length != null ? ` / ${report.rows.length}` : ""}
+      </div>
+    </div>
+  );
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: 8,
+        flex: 1,
+        minHeight: 0,
+        height: "100%",
+      }}
+    >
       {tableFull && (
         <div
           role="presentation"
@@ -355,8 +524,9 @@ export default function DailyReport({ username, user }) {
           justifyContent: "space-between",
           alignItems: "center",
           flexWrap: "wrap",
-          gap: 12,
-          padding: "12px 0",
+          gap: 8,
+          padding: "4px 0",
+          flexShrink: 0,
         }}
       >
         <div style={{ fontSize: 13, color: t.textSoft }}>
@@ -407,25 +577,20 @@ export default function DailyReport({ username, user }) {
         style={{
           background: "linear-gradient(135deg, #0d2137 0%, #1a3a5c 100%)",
           color: "#fff",
-          borderRadius: 14,
-          padding: "18px 24px",
+          borderRadius: 10,
+          padding: "8px 16px",
           textAlign: "center",
           fontWeight: 800,
-          fontSize: 15,
+          fontSize: 13,
           letterSpacing: 0.5,
+          flexShrink: 0,
         }}
       >
         HELION TRACKING — DAILY FLEET MONITORING REPORT
       </div>
 
-      <Panel subtitle="Refresh from CMS for full day data. Live update every 30s refreshes fuel, location & offline times. Cell colours: green=OK, orange=aging (2h+), red=stale (6h+) or never.">
+      <Panel subtitle="Quick live snapshot (10s). Full day refresh is slow — use only when needed.">
         <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "flex-end" }}>
-          <Inp
-            label="Search plate / device"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Filter table…"
-          />
           <Inp
             label="CMS analytics day"
             type="date"
@@ -458,22 +623,6 @@ export default function DailyReport({ username, user }) {
             disabled={loading}
           >
             {loading ? "Loading CMS (can take long)…" : "Refresh full day from CMS"}
-          </Btn>
-          <Sel
-            label="Filter"
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
-            options={[
-              { value: "all", label: "All" },
-              { value: "online", label: "Online" },
-              { value: "offline", label: "Offline" },
-              { value: "issues", label: "With issues" },
-              { value: "driving", label: "Driving" },
-              { value: "parked", label: "Parked" },
-            ]}
-          />
-          <Btn onClick={() => setTableFull((v) => !v)} disabled={!report?.rows?.length}>
-            {tableFull ? "Exit full screen" : "Full screen table"}
           </Btn>
           <label
             style={{
@@ -526,76 +675,55 @@ export default function DailyReport({ username, user }) {
         )}
       </Panel>
 
-      <AnalyticsPanel
-        view={analyticsView}
-        onViewChange={setAnalyticsView}
-        periodLabel="Custom range"
-        beginTs={analyticsBeginTs}
-        setBeginTs={setAnalyticsBeginTs}
-        endTs={analyticsEndTs}
-        setEndTs={setAnalyticsEndTs}
-        fuelDropMinL={fuelDropMinL}
-        setFuelDropMinL={setFuelDropMinL}
-        customFuelMin={customFuelMin}
-        setCustomFuelMin={setCustomFuelMin}
-        gprsGapMin={gprsGapMin}
-        setGprsGapMin={setGprsGapMin}
-        fuelDropHits={fuelDropHits}
-        gprsGapHits={gprsGapHits}
-        analyticsLoading={analyticsLoading}
-        onRunFuel={() => loadAnalytics("fuel")}
-        onRunGprs={() => loadAnalytics("gprs")}
-        onRunBoth={() => loadAnalytics("both")}
-      />
-
-      {topIssues.length > 0 && (
-        <Panel title="Issues to review" subtitle="Click vehicle in table for detail">
-          <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 200, overflowY: "auto" }}>
-            {topIssues.map((iss, i) => (
-              <button
-                key={`${iss.devIdno}-${iss.code}-${i}`}
-                type="button"
-                onClick={() => setSelectedDev(iss.devIdno)}
-                style={{
-                  textAlign: "left",
-                  padding: "10px 12px",
-                  borderRadius: 10,
-                  border: `1px solid ${t.border}`,
-                  background: t.panel,
-                  cursor: "pointer",
-                  fontFamily: "inherit",
-                  fontSize: 12,
-                }}
-              >
-                <strong>{iss.plate}</strong>
-                <span style={{ color: t.textSoft, marginLeft: 8 }}>{iss.message}</span>
-              </button>
-            ))}
-          </div>
-        </Panel>
-      )}
-
-      <Panel
-        title={`Fleet table — CMS day ${reportDate}`}
-        subtitle="Click a row to edit cameras & notes. Table scrolls independently — close edit panel with ×."
+      <div
+        style={{
+          flex: 1,
+          minHeight: 0,
+          display: "flex",
+          flexDirection: "column",
+          background: t.panel,
+          border: `1px solid ${t.border}`,
+          borderRadius: 16,
+          overflow: "hidden",
+        }}
       >
+        <div
+          style={{
+            padding: "10px 14px",
+            borderBottom: `1px solid ${t.border}`,
+            background: t.panelBright,
+            flexShrink: 0,
+          }}
+        >
+          <div style={{ fontWeight: 800, fontSize: 13 }}>Fleet table — CMS day {reportDate}</div>
+          <div style={{ color: t.textSoft, fontSize: 11, marginTop: 4 }}>
+            Search and filter above the table. Click a row to edit bundle, SIM, cameras & notes.
+          </div>
+        </div>
         <div
           style={
             tableFull
               ? {
                   position: "fixed",
-                  inset: 16,
+                  inset: 8,
                   zIndex: 601,
                   background: t.panel,
                   borderRadius: 14,
-                  padding: 12,
+                  padding: 0,
                   boxShadow: "0 18px 60px rgba(0,0,0,0.35)",
                   display: "flex",
                   flexDirection: "column",
+                  overflow: "hidden",
                 }
-              : {}
+              : {
+                  flex: 1,
+                  minHeight: 0,
+                  display: "flex",
+                  flexDirection: "column",
+                }
           }
         >
+          {tableToolbar}
           {loading && !report ? (
             <Spinner label="Building report from CMSV — can take 1–2 minutes…" />
           ) : !visibleRows.length && !loading && !reportRaw ? (
@@ -613,20 +741,21 @@ export default function DailyReport({ username, user }) {
           ) : (
             <div
               style={{
-                maxHeight: tableFull ? "none" : "calc(100vh - 300px)",
+                flex: 1,
+                minHeight: tableFull ? 0 : 320,
+                maxHeight: tableFull ? "none" : undefined,
                 overflow: "auto",
                 scrollBehavior: "smooth",
-                border: `1px solid ${t.border}`,
-                borderRadius: 10,
+                border: tableFull ? "none" : `1px solid ${t.border}`,
+                borderRadius: tableFull ? 0 : 10,
                 opacity: loading ? 0.65 : 1,
-                flex: tableFull ? 1 : undefined,
-                minHeight: tableFull ? 0 : undefined,
               }}
             >
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                 <thead style={{ position: "sticky", top: 0, zIndex: 3 }}>
                   <tr style={{ background: "#1a3a5c", color: "#fff" }}>
                     {[
+                      "",
                       "NO",
                       "PLATE",
                       "DEVICE",
@@ -658,30 +787,68 @@ export default function DailyReport({ username, user }) {
                 <tbody>
                   {visibleRows.map((row, idx) => {
                     const active = row.devIdno === selectedDev;
-                    const rowBg = row.hasIssues
+                    const isChecked = checkedDevs.has(row.devIdno);
+                    const rowBg = row.bundleLow
                       ? idx % 2 === 0
-                        ? "#fff8e6"
-                        : "#fff3cd"
-                      : idx % 2 === 0
-                        ? t.panel
-                        : t.bg;
+                        ? "#fee2e2"
+                        : "#fecaca"
+                      : row.hasIssues
+                        ? idx % 2 === 0
+                          ? "#fff8e6"
+                          : "#fff3cd"
+                        : idx % 2 === 0
+                          ? t.panel
+                          : t.bg;
                     return (
                       <tr
                         key={row.devIdno}
                         onClick={() => selectRow(row)}
                         style={{
-                          background: active ? t.accentSoft : rowBg,
+                          background: active ? t.accentSoft : isChecked ? "#e0f2fe" : rowBg,
                           cursor: "pointer",
                           borderBottom: `1px solid ${t.border}`,
                           boxShadow: active ? `inset 0 0 0 2px ${t.accent}` : undefined,
                         }}
                       >
+                        <td style={{ padding: 8, width: 36 }} onClick={(e) => e.stopPropagation()}>
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={(e) => toggleCheck(row.devIdno, e)}
+                            aria-label={`Select ${row.plate}`}
+                          />
+                        </td>
                         <td style={{ padding: 8 }}>{row.no ?? idx + 1}</td>
                         <td style={{ padding: 8, fontWeight: 600 }}>{row.plate}</td>
                         <td style={{ padding: 8 }}>{row.devIdno}</td>
                         <td style={{ padding: 8, fontSize: 11 }}>{row.sim || "—"}</td>
-                        <td style={{ padding: 8, fontSize: 11 }}>
-                          {fmtDay(row.bundlePurchasedDate)}
+                        <td
+                          style={{
+                            padding: 8,
+                            fontSize: 11,
+                            background: row.bundleLow ? "#fca5a5" : undefined,
+                            color: row.bundleLow ? "#7f1d1d" : undefined,
+                            fontWeight: row.bundleDaysLeft != null ? 700 : 400,
+                          }}
+                        >
+                          {row.bundleDaysLeft != null ? (
+                            <>
+                              <div>
+                                {row.bundleDaysLeft <= 0
+                                  ? "Expired"
+                                  : `${row.bundleDaysLeft}d left`}
+                              </div>
+                              {row.bundleEndsOn ? (
+                                <div style={{ fontSize: 9, fontWeight: 500, opacity: 0.85 }}>
+                                  ends {fmtDay(row.bundleEndsOn)}
+                                </div>
+                              ) : null}
+                            </>
+                          ) : row.bundlePurchasedDate ? (
+                            fmtDay(row.bundlePurchasedDate)
+                          ) : (
+                            "—"
+                          )}
                         </td>
                         <td style={{ padding: 8, fontSize: 10, color: t.textSoft }}>
                           {fmtTs(row.cmsDataSyncedAt)}
@@ -721,12 +888,65 @@ export default function DailyReport({ username, user }) {
             </div>
           )}
         </div>
+      </div>
+
+      <AnalyticsPanel
+        view={analyticsView}
+        onViewChange={setAnalyticsView}
+        periodLabel="Custom range"
+        beginTs={analyticsBeginTs}
+        setBeginTs={setAnalyticsBeginTs}
+        endTs={analyticsEndTs}
+        setEndTs={setAnalyticsEndTs}
+        fuelDropMinL={fuelDropMinL}
+        setFuelDropMinL={setFuelDropMinL}
+        customFuelMin={customFuelMin}
+        setCustomFuelMin={setCustomFuelMin}
+        gprsGapMin={gprsGapMin}
+        setGprsGapMin={setGprsGapMin}
+        fuelDropHits={fuelDropHits}
+        gprsGapHits={gprsGapHits}
+        analyticsLoading={analyticsLoading}
+        onRunFuel={() => loadAnalytics("fuel")}
+        onRunGprs={() => loadAnalytics("gprs")}
+        onRunBoth={() => loadAnalytics("both")}
+      />
+
+      {topIssues.length > 0 && (
+        <Panel title="Issues to review" subtitle="Click vehicle in table for detail">
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 120, overflowY: "auto" }}>
+            {topIssues.map((iss, i) => (
+              <button
+                key={`${iss.devIdno}-${iss.code}-${i}`}
+                type="button"
+                onClick={() => setSelectedDev(iss.devIdno)}
+                style={{
+                  textAlign: "left",
+                  padding: "10px 12px",
+                  borderRadius: 10,
+                  border: `1px solid ${t.border}`,
+                  background: t.panel,
+                  cursor: "pointer",
+                  fontFamily: "inherit",
+                  fontSize: 12,
+                }}
+              >
+                <strong>{iss.plate}</strong>
+                <span style={{ color: t.textSoft, marginLeft: 8 }}>{iss.message}</span>
+              </button>
+            ))}
+          </div>
         </Panel>
+      )}
 
       <VehicleEditDrawer
         selected={selected}
         bundleDraft={bundleDraft}
         setBundleDraft={setBundleDraft}
+        bundleDurationDraft={bundleDurationDraft}
+        setBundleDurationDraft={setBundleDurationDraft}
+        simPhoneDraft={simPhoneDraft}
+        setSimPhoneDraft={setSimPhoneDraft}
         cameraDraft={cameraDraft}
         setCameraDraft={setCameraDraft}
         noteDraft={noteDraft}
@@ -734,13 +954,14 @@ export default function DailyReport({ username, user }) {
         newNote={newNote}
         setNewNote={setNewNote}
         manualHistory={manualHistory}
-        updateHistory={updateHistory}
         saving={saving}
         onSave={() =>
           saveManual({
             cameraStatus: cameraDraft,
             notes: noteDraft,
             bundlePurchasedDate: bundleDraft || null,
+            bundleDurationDays: bundleDurationDraft,
+            simPhone: simPhoneDraft.trim() || null,
           })
         }
         onAddNote={addManualNote}
